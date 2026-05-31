@@ -237,6 +237,7 @@ let
       autoCheck ? true,
       hideAccount ? false,
       autoTrust ? false,
+      autoOnboard ? false,
     }:
     pkgs.writeShellApplication {
       name = "claude";
@@ -244,7 +245,7 @@ let
         coreutils
         ripgrep
       ]
-      ++ lib.optional autoTrust jq;
+      ++ lib.optional (autoTrust || autoOnboard) jq;
       text = ''
         export DISABLE_AUTOUPDATER=1
         export USE_BUILTIN_RIPGREP=0
@@ -296,6 +297,25 @@ let
 
         CLAUDE_DRIP_RUNNING="$(basename "$(readlink "$CC_HOME/current")")"
         export CLAUDE_DRIP_RUNNING
+
+        ${lib.optionalString autoOnboard ''
+          # Suppress Claude's first-run onboarding flow — it prompts for login
+          # even when credentials are already present, so an automated/headless
+          # launch would otherwise stall. Write-once: only when onboarding
+          # isn't already marked complete, to minimise churn on ~/.claude.json.
+          cj="$HOME/.claude.json"
+          [ -f "$cj" ] || echo '{}' > "$cj"
+          if [ "$(jq -r '.hasCompletedOnboarding // false' "$cj" 2>/dev/null)" != "true" ]; then
+            if jq --arg v "$CLAUDE_DRIP_RUNNING" \
+                 '. + {hasCompletedOnboarding: true, lastOnboardingVersion: $v, hasSeenTasksHint: true}' \
+                 "$cj" > "$cj.drip.tmp" 2>/dev/null; then
+              mv -f "$cj.drip.tmp" "$cj"
+            else
+              rm -f "$cj.drip.tmp"
+            fi
+          fi
+        ''}
+
         exec "$CC_HOME/current/claude" "$@"
       '';
     };
@@ -431,15 +451,33 @@ let
       '';
     };
 
-  # mkSettings — ~/.claude/settings.json. `settings` is a single deep-merged
-  # blob; module-owned keys (statusLine) are layered on top via recursiveUpdate
-  # so they always win while the user's other keys (incl. env) survive.
+  # The curated, opinionated settings.json defaults — the single source of
+  # truth, shared by the NixOS module and any external consumer (via
+  # mkSettings's `opinionated` flag, or by reading this set directly).
+  opinionatedDefaults = {
+    effortLevel = "high";
+    skipDangerousModePermissionPrompt = true;
+    terminalProgressBarEnabled = true;
+    tui = "fullscreen";
+    env = {
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+      CLAUDE_CODE_NO_FLICKER = "1";
+    };
+  };
+
+  # mkSettings — ~/.claude/settings.json. Layering, low → high precedence:
+  # opinionatedDefaults (when `opinionated`) < `settings` < module-owned
+  # `statusLine`. recursiveUpdate merges nested attrs (e.g. env), so a
+  # consumer's extra env keys survive alongside the curated defaults.
   mkSettings =
     {
       settings ? { },
       statusLineCommand ? null,
+      opinionated ? false,
     }:
     let
+      base = lib.optionalAttrs opinionated opinionatedDefaults;
       managed = lib.optionalAttrs (statusLineCommand != null) {
         statusLine = {
           type = "command";
@@ -448,7 +486,8 @@ let
         };
       };
     in
-    pkgs.writeText "claude-drip-settings.json" (builtins.toJSON (lib.recursiveUpdate settings managed));
+    pkgs.writeText "claude-drip-settings.json"
+      (builtins.toJSON (lib.recursiveUpdate (lib.recursiveUpdate base settings) managed));
 in
 {
   inherit
@@ -457,5 +496,6 @@ in
     mkHint
     mkStatusBin
     mkSettings
+    opinionatedDefaults
     ;
 }

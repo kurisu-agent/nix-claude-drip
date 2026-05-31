@@ -30,22 +30,11 @@ let
     autoCheck = cfg.autoUpdate;
   };
 
-  launcher = claudeLib.mkLauncher (commonArgs // { inherit (cfg) hideAccount autoTrust; });
+  launcher = claudeLib.mkLauncher (commonArgs // { inherit (cfg) hideAccount autoTrust autoOnboard; });
   hint = claudeLib.mkHint commonArgs;
 
-  # Curated defaults layered UNDER cfg.settings (which override them).
-  opinionatedSet = {
-    effortLevel = "high";
-    skipDangerousModePermissionPrompt = true;
-    terminalProgressBarEnabled = true;
-    tui = "fullscreen";
-    env = {
-      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
-      CLAUDE_CODE_NO_FLICKER = "1";
-    };
-  };
-  mergedSettings = lib.recursiveUpdate (lib.optionalAttrs cfg.opinionatedDefaults opinionatedSet) cfg.settings;
+  # Curated defaults (from the shared lib) layered UNDER cfg.settings.
+  mergedSettings = lib.recursiveUpdate (lib.optionalAttrs cfg.opinionatedDefaults claudeLib.opinionatedDefaults) cfg.settings;
 
   statusline = claudeLib.mkStatusBin (commonArgs // { effortLevel = mergedSettings.effortLevel or null; });
 
@@ -188,6 +177,20 @@ in
         dialog. Security note: this trusts every directory you run `claude`
         from — consistent with the bypass-permissions posture, but set false
         if you want Claude's per-directory trust gate enforced.
+      '';
+    };
+
+    autoOnboard = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        On first launch, mark Claude's onboarding complete in ~/.claude.json
+        (`hasCompletedOnboarding = true` + `lastOnboardingVersion`) if it isn't
+        already. Claude's interactive first-run flow prompts for login even
+        when credentials are present, which stalls an automated/headless launch;
+        this seeds past it so `claude` drops straight into the prompt. Write-once
+        (skips when onboarding is already marked done). Set false to keep the
+        normal first-run onboarding.
       '';
     };
 
