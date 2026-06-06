@@ -4,13 +4,14 @@
 {
   nixpkgs,
   system,
+  variant ? "mocha",
   paletteOverride ? { },
 }:
 let
   pkgs = nixpkgs.legacyPackages.${system};
   inherit (nixpkgs) lib;
 
-  palette = import ./palette.nix { inherit paletteOverride; };
+  palette = import ./palette.nix { inherit variant paletteOverride; };
 
   claude = import ./claude.nix {
     inherit
@@ -24,5 +25,5 @@ claude
 // {
   inherit palette;
   # Re-tint without re-importing the whole lib.
-  mkPalette = override: import ./palette.nix { paletteOverride = paletteOverride // override; };
+  mkPalette = override: import ./palette.nix { inherit variant; paletteOverride = paletteOverride // override; };
 }

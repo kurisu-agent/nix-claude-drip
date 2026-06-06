@@ -14,9 +14,16 @@
 let
   cfg = config.services.claude-code;
 
+  # A "light*" Claude theme drives the Latte statusline flavour; everything
+  # else (incl. theme = null → Claude's dark default) stays Mocha.
+  paletteVariant = if cfg.theme != null && lib.hasPrefix "light" cfg.theme then "latte" else "mocha";
+
   claudeLib = import ../lib/claude.nix {
     inherit pkgs lib;
-    palette = import ../lib/palette.nix { inherit (cfg.statusLine) paletteOverride; };
+    palette = import ../lib/palette.nix {
+      variant = paletteVariant;
+      inherit (cfg.statusLine) paletteOverride;
+    };
   };
 
   updater = claudeLib.mkUpdater {
@@ -33,8 +40,12 @@ let
   launcher = claudeLib.mkLauncher (commonArgs // { inherit (cfg) hideAccount autoTrust autoOnboard; });
   hint = claudeLib.mkHint commonArgs;
 
-  # Curated defaults (from the shared lib) layered UNDER cfg.settings.
-  mergedSettings = lib.recursiveUpdate (lib.optionalAttrs cfg.opinionatedDefaults claudeLib.opinionatedDefaults) cfg.settings;
+  # Curated defaults (from the shared lib) layered UNDER cfg.settings, then
+  # the dedicated `theme` knob on top (so `services.claude-code.theme` wins
+  # over a `settings.theme` and stays in sync with the statusline flavour).
+  mergedSettings =
+    lib.recursiveUpdate (lib.optionalAttrs cfg.opinionatedDefaults claudeLib.opinionatedDefaults) cfg.settings
+    // lib.optionalAttrs (cfg.theme != null) { theme = cfg.theme; };
 
   statusline = claudeLib.mkStatusBin (commonArgs // { effortLevel = mergedSettings.effortLevel or null; });
 
@@ -94,6 +105,28 @@ in
       type = lib.types.ints.positive;
       default = 3600;
       description = "Minimum seconds between background update checks (shared across all triggers).";
+    };
+
+    theme = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.enum [
+          "dark"
+          "light"
+          "dark-daltonized"
+          "light-daltonized"
+          "dark-ansi"
+          "light-ansi"
+        ]
+      );
+      default = null;
+      example = "light";
+      description = ''
+        Claude Code's own UI theme, written to settings.json's `theme` key.
+        null leaves it unset (Claude defaults to dark). Any `light*` value
+        also flips the built-in statusline to the Catppuccin Latte flavour
+        so its colours stay legible on a light terminal; `dark*`/null keep
+        the Mocha statusline.
+      '';
     };
 
     statusLine = {
