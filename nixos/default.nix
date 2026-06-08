@@ -20,6 +20,7 @@ let
 
   claudeLib = import ../lib/claude.nix {
     inherit pkgs lib;
+    variant = paletteVariant;
     palette = import ../lib/palette.nix {
       variant = paletteVariant;
       inherit (cfg.statusLine) paletteOverride;

@@ -21,6 +21,7 @@ let
       success = "#94e2d5"; # added count / restart-ready hint
       warning = "#f9e2af"; # modified count / downloading hint
       error = "#f38ba8"; # deleted count / update-error hint
+      muted = "#9399b2"; # dim segments (pct / model / version) — overlay2
     };
     # Catppuccin Latte (light) — darker / more saturated so the segments
     # stay legible on a light terminal background.
@@ -30,6 +31,7 @@ let
       success = "#179299"; # added count / restart-ready hint (teal)
       warning = "#df8e1d"; # modified count / downloading hint (yellow)
       error = "#d20f39"; # deleted count / update-error hint (red)
+      muted = "#6c6f85"; # dim segments — subtext0, readable on a light bg
     };
   };
   flavour =

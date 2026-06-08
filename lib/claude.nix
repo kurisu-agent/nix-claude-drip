@@ -9,6 +9,7 @@
   pkgs,
   lib,
   palette,
+  variant ? "mocha",
 }:
 
 let
@@ -46,6 +47,13 @@ let
     max = "󰪥";
   };
 
+  # Muted/secondary segments (pct, model, version). The SGR-2 "dim"
+  # attribute reads as a faint grey on a dark terminal, but on a light one
+  # it washes the dark default foreground out to near-invisible — so light
+  # themes use an explicit readable grey (palette.muted) instead.
+  dimSeq =
+    if variant == "latte" then "\\033[38;2;${hexToRgbCsv palette.muted}m" else "\\033[2m";
+
   # Full color set for the prompt (ACCENT/BRANCH/DIM + the hint colors).
   colorVars = ''
     RESET=$'\033[0m'
@@ -54,7 +62,7 @@ let
     SUCCESS=$'\033[38;2;${hexToRgbCsv palette.success}m'
     WARNING=$'\033[38;2;${hexToRgbCsv palette.warning}m'
     ERROR=$'\033[38;2;${hexToRgbCsv palette.error}m'
-    DIM=$'\033[2m'
+    DIM=$'${dimSeq}'
   '';
 
   # Just the colors the hint fragment references — keeps claude-hint clean

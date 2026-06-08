@@ -18,6 +18,7 @@ let
       pkgs
       lib
       palette
+      variant
       ;
   };
 in
