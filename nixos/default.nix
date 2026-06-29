@@ -164,6 +164,7 @@ in
         `settings` (which override them):
           effortLevel = "high";
           skipDangerousModePermissionPrompt = true;
+          disableClaudeAiConnectors = true;           # no claude.ai MCP connectors
           terminalProgressBarEnabled = true;          # OSC 9;4 terminal progress
           env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
           env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";  # telemetry/Sentry/feedback/surveys off

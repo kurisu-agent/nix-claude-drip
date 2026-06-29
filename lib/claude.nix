@@ -465,6 +465,7 @@ let
   opinionatedDefaults = {
     effortLevel = "high";
     skipDangerousModePermissionPrompt = true;
+    disableClaudeAiConnectors = true;
     terminalProgressBarEnabled = true;
     tui = "fullscreen";
     env = {
