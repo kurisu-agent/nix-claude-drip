@@ -1,9 +1,11 @@
 # claude-drip NixOS module. Puts the self-updating `claude` launcher on
-# PATH, activates ~/.claude/settings.json, enables nix-ld (the native binary
-# is a foreign glibc ELF), and optionally schedules a per-user systemd timer
-# so the binary is refreshed even between sessions. On non-NixOS hosts (e.g.
-# glibc devcontainers) consume the flake *package* instead — the binary runs
-# on the system glibc with no module and no nix-ld.
+# PATH, installs ~/.claude/settings.json (by two deliberately redundant
+# paths — see the settings units in `config`), enables nix-ld (the native
+# binary is a foreign glibc ELF), and optionally schedules a per-user systemd
+# timer so the binary is refreshed even between sessions, or fetches it once
+# at boot. On non-NixOS hosts (e.g. glibc devcontainers) consume the flake
+# *package* instead — the binary runs on the system glibc with no module and
+# no nix-ld.
 {
   config,
   lib,
@@ -28,7 +30,7 @@ let
   };
 
   updater = claudeLib.mkUpdater {
-    inherit (cfg) channel pinVersion;
+    inherit (cfg) channel pinVersion releaseBase;
   };
   updaterBin = "${updater}/bin/claude-update";
 
@@ -63,9 +65,16 @@ let
   settingsFile = claudeLib.mkSettings {
     settings = mergedSettings;
     inherit statusLineCommand;
+    inherit (cfg.statusLine) refreshInterval;
   };
 
-  mkUserUnits = f: lib.listToAttrs (map (u: lib.nameValuePair "claude-drip-update-${u}" (f u)) cfg.users);
+  # One unit per name in `users`, named claude-drip-<kind>-<user>. The kind is
+  # a parameter rather than baked in because four different units share this
+  # shape (update service, its timer, the settings installer, the boot
+  # prefetch) — and because a timer must be named after the service it
+  # triggers, so the update service and the update timer have to agree on it.
+  mkUserUnits =
+    kind: f: lib.listToAttrs (map (u: lib.nameValuePair "claude-drip-${kind}-${u}" (f u)) cfg.users);
 in
 {
   options.services.claude-code = {
@@ -89,6 +98,25 @@ in
       default = null;
       example = "2.1.158";
       description = "Freeze to an exact version; the updater won't move past it.";
+    };
+
+    releaseBase = lib.mkOption {
+      type = lib.types.str;
+      default = "https://downloads.claude.ai/claude-code-releases";
+      example = "http://mirror.example.net:8099/claude-code-releases";
+      description = ''
+        Root URL the updater reads the release channel from — the channel
+        pointer (`<base>/<channel>`), the per-version manifest
+        (`<base>/<version>/manifest.json`) and the binary itself
+        (`<base>/<version>/<platform>/claude`). Point it at a mirror when you
+        want the ~262 MiB binary fetched once for a LAN full of machines, or
+        when the hosts doing the updating can't reach the internet directly.
+        `services.claude-code-cache` (the sibling module in this flake) serves
+        exactly this layout. The updater still checks the binary's sha256
+        against the manifest, which catches a truncated or corrupted mirror —
+        but the manifest comes from the same base, so this is an integrity
+        check on the transfer, not a reason to trust an untrusted mirror.
+      '';
     };
 
     autoUpdate = lib.mkOption {
@@ -153,6 +181,31 @@ in
           accent = "#FF0099";
         };
         description = "Re-tint the built-in statusline (accent / branch / success / warning / error).";
+      };
+      refreshInterval = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = 1;
+        example = 3;
+        description = ''
+          Seconds between statusline re-renders, written to settings.json's
+          `statusLine.refreshInterval`. null omits the key and leaves Claude's
+          own cadence alone.
+
+          The default of 1 exists for the update indicator. Without it Claude
+          re-runs the statusline only on conversation events — and those go
+          quiet exactly when the indicator has something to say, because a
+          background download runs while you sit reading Claude's last answer.
+          The download percentage would then freeze at whatever value the last
+          keystroke happened to catch, and a finished update would keep
+          claiming to be downloading until you typed again.
+
+          Hazard: a statusline command that takes longer than the interval is
+          aborted by the next tick and renders NOTHING, blanking the row
+          entirely — so this is a floor on how fast your command must be, not
+          just a polling rate. If you set a slow custom `statusLine.command`
+          (one that shells out to the network, say), raise this above its
+          worst-case runtime or set it to null.
+        '';
       };
     };
 
@@ -245,11 +298,35 @@ in
       '';
     };
 
+    prefetch = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Run the updater once per user at boot, so the binary is already staged
+        before anyone's first `claude`. Without it, the first launch on a
+        freshly-built machine blocks on the whole ~262 MiB download — the
+        launcher bootstraps synchronously when nothing is installed at all.
+        Requires `users`.
+
+        Orthogonal to `updateTimer`: prefetch is the one-shot at boot, the
+        timer is the recurring refresh. Enable both to get both; they take the
+        same lock, so an overlap costs nothing but an early exit.
+      '';
+    };
+
     users = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "alice" ];
-      description = "Users the `updateTimer` runs for (each updates their own ~/.claude/cc).";
+      description = ''
+        Users this module provisions per-user system units for: the
+        `updateTimer` refresh and the `prefetch` fetch (each into their own
+        ~/.claude/cc), plus the settings.json installer that backstops the
+        activation script on hosts with no systemd user manager. Empty means
+        no per-user units at all — settings.json then arrives only via user
+        activation, which is enough on a host where every user gets a logind
+        session.
+      '';
     };
   };
 
@@ -267,6 +344,9 @@ in
     ]
     ++ lib.optional cfg.installUpdateCli updater;
 
+    # settings.json, delivery path #1 — user activation. Runs for every user
+    # with a systemd user manager, including ones not named in `users`, which
+    # is why it stays even though path #2 exists.
     system.userActivationScripts = lib.mkIf manageSettings {
       claudeDripSettings.text = ''
         mkdir -p "$HOME/.claude"
@@ -278,22 +358,101 @@ in
       alias yolo='claude --dangerously-skip-permissions'
     '';
 
-    systemd.services = lib.mkIf (cfg.updateTimer && cfg.autoUpdate) (
-      mkUserUnits (u: {
-        description = "claude-drip: refresh Claude Code for ${u}";
-        after = [ "network-online.target" ];
-        wants = [ "network-online.target" ];
-        serviceConfig = {
-          Type = "oneshot";
-          User = u;
-          Environment = "HOME=${config.users.users.${u}.home}";
-        };
-        script = updaterBin;
-      })
-    );
+    systemd.services = lib.mkMerge [
+      # settings.json, delivery path #2 — a per-user SYSTEM oneshot.
+      #
+      # Path #1 above is the only one on a stock desktop and is enough there,
+      # but it is not enough everywhere. `system.userActivationScripts`
+      # compiles into `systemd.user.services.nixos-activation`: a systemd
+      # --user unit (ConditionUser=!@system, wantedBy default.target). A
+      # --user unit only runs once that user's manager — user@<uid>.service —
+      # has been started, and nothing starts a user manager without a
+      # PAM/logind session. On a host whose sshd sets `UsePAM = false`, or in
+      # any image or container with no logind at all, no user manager is ever
+      # started, the activation script never fires, and settings.json is
+      # simply never written.
+      #
+      # That failure is silent and misshapen. The launcher-side knobs
+      # (autoTrust, autoOnboard) keep working, because they run inside the
+      # launcher process rather than out of settings.json — so onboarding
+      # looks healthy while everything that lives ONLY in settings.json (the
+      # fullscreen TUI, the statusline, effortLevel, the env defaults) quietly
+      # does not happen. It reads as "Claude is misbehaving", not as "a file
+      # is missing", and costs an afternoon to trace.
+      #
+      # So this is additive and neither path can be dropped: #1 covers every
+      # user with a session, including ones this module was never told about;
+      # #2 covers the users it WAS told about on hosts with no session to hang
+      # off. Both install the same store path with the same mode, so a machine
+      # running both just writes identical bytes twice.
+      #
+      # Run as the user, never as root. A root-run `mkdir -p ~/.claude` leaves
+      # a root-owned directory the user then cannot write, which breaks every
+      # later state/cache write underneath it — and again surfaces as a
+      # misbehaving tool rather than as a permissions error.
+      #
+      # RemainAfterExit holds the unit "active" once the file is in place so a
+      # daemon-reload doesn't re-run it; the settingsFile store path is baked
+      # into the script, so changing settings.json changes the unit and
+      # nixos-rebuild restarts it — which installs the new file.
+      (lib.mkIf manageSettings (
+        mkUserUnits "settings" (u: {
+          description = "claude-drip: install ~/.claude/settings.json for ${u}";
+          wantedBy = [ "multi-user.target" ];
+          path = [ pkgs.coreutils ];
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            User = u;
+            Group = config.users.users.${u}.group;
+            Environment = "HOME=${config.users.users.${u}.home}";
+          };
+          script = ''
+            mkdir -p "$HOME/.claude"
+            install -m 0644 ${settingsFile} "$HOME/.claude/settings.json"
+          '';
+        })
+      ))
+
+      # The binary before the first launch. Type=simple, NOT oneshot: a
+      # oneshot wantedBy multi-user.target holds that target until it exits,
+      # so a ~262 MiB fetch on a cold machine would sit in front of boot
+      # completion. A simple service counts as started the moment it forks,
+      # and the download proceeds alongside everything else — which is all we
+      # want, since nothing else in the boot depends on it having finished.
+      (lib.mkIf cfg.prefetch (
+        mkUserUnits "prefetch" (u: {
+          description = "claude-drip: prefetch Claude Code for ${u}";
+          wantedBy = [ "multi-user.target" ];
+          after = [ "network-online.target" ];
+          wants = [ "network-online.target" ];
+          serviceConfig = {
+            Type = "simple";
+            User = u;
+            Group = config.users.users.${u}.group;
+            Environment = "HOME=${config.users.users.${u}.home}";
+          };
+          script = updaterBin;
+        })
+      ))
+
+      (lib.mkIf (cfg.updateTimer && cfg.autoUpdate) (
+        mkUserUnits "update" (u: {
+          description = "claude-drip: refresh Claude Code for ${u}";
+          after = [ "network-online.target" ];
+          wants = [ "network-online.target" ];
+          serviceConfig = {
+            Type = "oneshot";
+            User = u;
+            Environment = "HOME=${config.users.users.${u}.home}";
+          };
+          script = updaterBin;
+        })
+      ))
+    ];
 
     systemd.timers = lib.mkIf (cfg.updateTimer && cfg.autoUpdate) (
-      mkUserUnits (u: {
+      mkUserUnits "update" (u: {
         description = "claude-drip: refresh Claude Code for ${u}";
         wantedBy = [ "timers.target" ];
         timerConfig = {
@@ -308,6 +467,10 @@ in
       {
         assertion = !cfg.updateTimer || cfg.users != [ ];
         message = "services.claude-code.updateTimer requires services.claude-code.users to be non-empty.";
+      }
+      {
+        assertion = !cfg.prefetch || cfg.users != [ ];
+        message = "services.claude-code.prefetch requires services.claude-code.users to be non-empty.";
       }
     ];
   };
