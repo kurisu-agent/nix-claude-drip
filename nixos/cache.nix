@@ -22,15 +22,16 @@
 let
   cfg = config.services.claude-code-cache;
 
-  # nginx wants the upstream in three different shapes, so it gets split once,
-  # here:
-  #   origin    — "https://host[:port]", the only part proxy_pass is given;
-  #   authority — "host[:port]", for the Host header and hence the TLS SNI;
-  #   path      — "/claude-code-releases", the prefix that has to be put back
-  #               onto the front of every proxied request URI.
+  # The upstream with any trailing slash removed, so the location targets below
+  # can each append exactly one.
+  upstreamBase = lib.removeSuffix "/" cfg.upstream;
+
+  # The one piece nginx needs that `upstreamBase` cannot give it directly: the
+  # authority, "host[:port]", for the Host header and hence the TLS SNI. The
+  # location targets use `upstreamBase` verbatim, so nothing else is extracted.
   # The pattern is anchored and total, so a malformed `upstream` trips the
   # assertion below instead of quietly producing a broken nginx config.
-  upstreamMatch = builtins.match "(https?://([^/]+))(/.*)?" (lib.removeSuffix "/" cfg.upstream);
+  upstreamMatch = builtins.match "(https?://([^/]+))(/.*)?" upstreamBase;
 
   # A group that did not participate — and every group of a URL that failed to
   # match — reads as null, but evaluation still has to get far enough for the
@@ -43,9 +44,7 @@ let
     in
     if g == null then "" else g;
 
-  upstreamOrigin = upstreamGroup 0;
   upstreamAuthority = upstreamGroup 1;
-  upstreamPath = upstreamGroup 2;
 
   # One cache, one shared-memory zone, one name for both.
   zone = "claude_code_cache";
@@ -61,32 +60,31 @@ let
   # actually reclaims them (see the proxy_cache_path comment below).
   immutableTtl = "365d";
 
-  # With no resolver configured, proxy_pass names the upstream literally and
-  # nginx resolves it once, at startup; with one configured it gets a variable
-  # instead, which is what forces a lookup per request. The `resolver` option
-  # description spells out why that is the operator's choice and not ours.
-  proxyTarget = if cfg.resolver == [ ] then upstreamOrigin else "$claude_code_cache_upstream";
-
-  # Everything a proxied location needs except how long the response stays
-  # fresh — which is the only axis this URL space splits on, so it is the only
-  # parameter. Written as raw extraConfig rather than the module's `proxyPass`
-  # option because that option would also drag in `recommendedProxySettings`
-  # (which sets `Host $host` — exactly the header we have to override) and, if
-  # `services.nginx.proxyResolveWhileRunning` were on, a second and conflicting
-  # opinion about the variable-vs-literal question handled above.
-  proxyLocation = ttl: {
+  # Everything a proxied location needs except its upstream target and how long
+  # the response stays fresh. Written as raw extraConfig rather than the
+  # module's `proxyPass` option because that option would also drag in
+  # `recommendedProxySettings`, which sets `Host $host` — exactly the header
+  # this module has to override.
+  #
+  # WHY EVERY LOCATION IS A PREFIX OR EXACT MATCH, AND WHY NOTHING REWRITES.
+  # The obvious shape for this cache is one regex location for the channel
+  # pointer and one catch-all for everything else, with the upstream's own path
+  # prefix (`/claude-code-releases`) glued back on by `rewrite ^ <prefix>$uri`.
+  # That is a security bug, and NixOS's own nginx config linter rejects it:
+  # `$uri` is the DECODED request path, so a client asking for `/x%0aHeader:%20v`
+  # puts a real newline into the rewritten URI and thereby into the request line
+  # sent upstream — HTTP request splitting. Reconstructing a proxied URI from
+  # any client-controlled variable has the same flaw.
+  #
+  # So the prefix is never reassembled at all. nginx's own prefix-location
+  # substitution does it: for a location with a URI in `proxy_pass`, the part of
+  # the request matching the location is replaced by that URI, entirely inside
+  # nginx and with no variable in sight. That works for prefix and exact
+  # locations, and is the one thing a REGEX location may not do — which is
+  # precisely why the channel pointers are matched exactly by name instead.
+  proxyLocation = target: ttl: {
     extraConfig = ''
-      ${lib.optionalString (upstreamPath != "") ''
-        # proxy_pass may not carry a URI part inside a regex location, and the
-        # variable form ignores one, so the upstream's own path prefix is put
-        # back onto the request URI here instead — which keeps both locations,
-        # in both resolver modes, to a single shape. $uri is the decoded path,
-        # lossless for a URL space of version numbers, platform names and
-        # "manifest.json"; query arguments survive because the replacement
-        # contains no "?", so nginx re-appends them.
-        rewrite ^ ${upstreamPath}$uri break;
-      ''}
-      proxy_pass ${proxyTarget};
+      proxy_pass ${target};
       proxy_http_version 1.1;
 
       # Caching only ever happens on a buffered response. State it rather than
@@ -120,13 +118,29 @@ let
 
       # N machines booting at once collapse onto ONE upstream fetch: the first
       # request through populates the entry and the rest wait on it. The lock
-      # windows are minutes rather than nginx's 5 s defaults because the payload
-      # is ~262 MiB over the WAN — but deliberately under the updater's own
-      # `curl --max-time 300`, so a queued client still gets served from the
-      # finished entry instead of timing out while waiting for it.
+      # windows are far longer than nginx's 5 s defaults because the payload is
+      # ~262 MiB over the WAN, and far SHORTER than they could be because of
+      # what waiting costs the client.
+      #
+      # THE CEILING IS THE CLIENT'S STALL DETECTOR, NOT THIS CACHE. A queued
+      # request receives NOTHING — not a byte, not a header — for as long as it
+      # is held here, and curl's `--speed-limit`/`--speed-time` pair starts
+      # counting from the moment the request is in flight rather than from the
+      # first body byte. So a held client reads as "0 bytes/sec" and is killed
+      # by its own timeout: measured directly against a server that withheld
+      # its headers, a curl carrying `--speed-limit 4096 --speed-time 30` died
+      # at exactly 30 s with "Operation too slow". Held too long, this lock
+      # therefore destroys precisely the fleet-boot herd it exists to protect.
+      #
+      # 45 s sits under the 120 s stall window the sibling updater in this
+      # flake now uses (lib/claude.nix), with room for a client whose window is
+      # tighter still. Past it nginx releases the queued request to the
+      # upstream — a WAN fetch that the lock would rather have avoided, but a
+      # served client beats a collapsed one. The two figures are a pair; moving
+      # this one above any client's stall window silently reintroduces the bug.
       proxy_cache_lock on;
-      proxy_cache_lock_age 180s;
-      proxy_cache_lock_timeout 180s;
+      proxy_cache_lock_age 45s;
+      proxy_cache_lock_timeout 45s;
 
       # A WAN blip serves the copy we already have rather than failing the
       # client, and a pointer refresh never blocks anyone: the stale value goes
@@ -188,9 +202,21 @@ in
         otherwise fetch directly, and the default is exactly the client
         default. Point it at another cache to chain them (a site cache in front
         of a rack cache), or at an internal mirror. Any path prefix in the URL
-        is preserved: it is re-attached to each proxied request, so clients
-        always address this cache at its root no matter how deep the upstream
-        sits.
+        is preserved: nginx substitutes it for the matched part of each
+        request, so clients always address this cache at its root no matter how
+        deep the upstream sits.
+
+        The name here is resolved ONCE, when nginx starts, and that address is
+        held until nginx is reloaded — the ordinary consequence of naming an
+        upstream literally in `proxy_pass`. Against a CDN that rotates
+        addresses this can eventually go stale; the symptom is a cache that
+        worked yesterday and now times out, and `systemctl reload nginx` cures
+        it (a `nixos-rebuild switch` does so as a side effect). The alternative
+        — nginx's variable form of `proxy_pass`, which re-resolves per request
+        — is deliberately NOT offered here, because it cannot apply the
+        upstream's path prefix without rebuilding the request URI from a
+        client-controlled variable, which is the request-splitting hazard
+        documented above `proxyLocation`.
       '';
     };
 
@@ -263,31 +289,25 @@ in
       '';
     };
 
-    resolver = lib.mkOption {
+    channels = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ ];
-      example = [
-        "10.0.0.1"
-        "valid=30s"
+      default = [
+        "latest"
+        "stable"
       ];
       description = ''
-        DNS servers nginx should use to re-resolve the upstream while running,
-        and the one real tradeoff in this module.
+        The channel-pointer names, each of which gets its own exactly-matched
+        location cached for `channelTtl`. EVERY OTHER PATH is treated as
+        immutable and cached until it is evicted, which is correct for the
+        per-version manifests and binaries that make up the rest of this URL
+        space — and wrong for a channel not named here, which would be pinned
+        for a year. So if a new channel appears, add it.
 
-        Empty — the default — names the upstream in `proxy_pass` literally, so
-        nginx resolves it once at startup and holds that address until it is
-        reloaded or restarted. That works on every network, including ones with
-        no reachable public resolver, but it goes stale against a CDN that
-        rotates addresses; the symptom is a cache that worked yesterday and now
-        times out, cured by `systemctl reload nginx`.
-
-        A non-empty list switches `proxy_pass` to its variable form, which
-        re-resolves per request and follows rotation on its own. But that form
-        *requires* a resolver directive, and there is no defensible default to
-        hardcode — a public resolver would be the wrong answer, and often an
-        unreachable one, on a restricted network. So you name it. Entries are
-        passed through verbatim and in order, which is also how you append
-        nginx's own parameters, such as `valid=30s` or `ipv6=off`.
+        Naming them, rather than matching "a single path segment at the root"
+        with a regex, is what lets this module hand the upstream's path prefix
+        to nginx's own prefix substitution instead of rebuilding the URI from
+        `$uri` — see the comment above `proxyLocation` for why rebuilding it is
+        a request-splitting hazard.
       '';
     };
   };
@@ -320,32 +340,23 @@ in
         }
       ];
 
-      extraConfig = lib.optionalString (cfg.resolver != [ ]) ''
-        # Scoped to this server rather than set through `services.nginx.resolver`,
-        # which is http-wide and would silently change how every other virtual
-        # host on this machine resolves its own upstreams.
-        resolver ${lib.concatStringsSep " " cfg.resolver};
-
-        # proxy_pass only re-resolves when its argument contains a variable.
-        # That is the entire reason this indirection exists.
-        set $claude_code_cache_upstream "${upstreamOrigin}";
-      '';
-
-      locations = {
-        # The channel pointer. Rather than name the channels — this module
-        # knows none of them — match their shape: a pointer is a single path
-        # segment at the root, while everything immutable lives under a version
-        # directory and so carries a second slash. A regex location outranks
-        # the prefix one below, so this wins for `/latest`, `/stable`, or
-        # whatever a channel is called next.
-        "~ ^/[^/]+$" = proxyLocation cfg.channelTtl;
-
-        # Everything under a version: `<version>/manifest.json` and
-        # `<version>/<platform>/claude`. A released version is never rebuilt,
-        # so these are cached until they are evicted rather than until they
-        # expire.
-        "/" = proxyLocation immutableTtl;
-      };
+      locations =
+        # The channel pointers, one exactly-matched location each. An exact
+        # match outranks the prefix location below, so these win for their own
+        # names and nothing else is affected.
+        lib.listToAttrs (
+          map (c: lib.nameValuePair "= /${c}" (proxyLocation "${upstreamBase}/${c}" cfg.channelTtl))
+            cfg.channels
+        )
+        // {
+          # Everything else: `<version>/manifest.json` and
+          # `<version>/<platform>/claude`. A released version is never rebuilt,
+          # so these are cached until they are evicted rather than until they
+          # expire. The trailing slash on both sides is what makes nginx
+          # substitute the upstream's path prefix for the matched "/" — the
+          # whole reason no rewrite is needed.
+          "/" = proxyLocation "${upstreamBase}/" immutableTtl;
+        };
     };
 
     # nginx runs under ProtectSystem=strict and grants itself only its own
