@@ -13,13 +13,41 @@ statusline.
 
 - **Self-updating native binary.** Hourly check against Anthropic's release
   channel, SHA-256-verified download, atomic swap under `~/.claude/cc`. The
-  running session keeps working; the statusline shows `󰇚 <ver>` while
+  running session keeps working; the statusline shows `󰇚 47%` while
   downloading, then `󰜉 <ver>` (restart to apply).
 - **Statusline.** `path · git · context% · effort · model · version · update-hint`.
+- **Fleet-friendly.** Point `releaseBase` at a mirror — or at the pull-through
+  cache module in this flake — and the ~262 MiB binary crosses the WAN once
+  per release instead of once per machine.
 - **Opinionated defaults** — a curated `settings.json` (see below), all overridable.
 - **Runs anywhere with Nix.** NixOS host (the module, via `nix-ld`) or a glibc
   devcontainer (just the package — it runs on the system glibc loader, no
   patchelf).
+
+## Update indicator
+
+The last statusline segment is the updater's lifecycle, one glyph per state:
+
+| hint | state | |
+|---|---|---|
+| | idle | nothing appended — you're on the latest |
+| `󰚰` | checking | reading the channel pointer and manifest |
+| `󰇚 47%` | downloading | transfer in flight (bare `󰇚` if the size is unknown) |
+| `󰕥` | verifying | bytes in, SHA-256 running |
+| `󰜉 1.2.3` | staged | new version on disk — restart to apply |
+| `󰀪` | error | checksum mismatch, or a fetch that failed after connecting |
+| `󰅤` | offline | channel unreachable |
+
+Precedence is `downloading > verifying > staged > error > offline > checking`, so
+a pending restart is never masked by a later failed fetch.
+
+**The percentage is a number that moves, not a bar** — there is deliberately no
+progress bar, the row is width-constrained. It repaints at
+`statusLine.refreshInterval` (default 1s), which is a floor: ~262 MiB over a
+9 MB/s link is ~29 seconds, so ~29 visible steps, and on a very fast link you
+get a handful and then `󰕥`. A transfer whose updater was killed mid-flight
+(SIGKILL, suspend) can't write a closing state, so a percentage whose heartbeat
+goes 45s stale turns red — a frozen number never passes for a live one.
 
 ## Opinionated defaults
 
@@ -55,6 +83,63 @@ Anywhere (`nix profile`, e.g. inside a container):
 ```
 nix profile install github:kurisu-agent/nix-claude-drip
 ```
+
+## Fleets
+
+Claude Code ships ~daily and the binary is ~262 MiB, so every machine pulling
+its own copy is the same download over and over. `releaseBase` moves where the
+updater looks — channel pointer, manifest and binary all hang off it.
+
+`nixosModules.cache` is a mirror you can point it at: a dumb nginx pull-through
+cache with **no timer, no polling and no knowledge of versions, manifests or
+checksums**. Clients keep their existing fetch path and still verify the
+SHA-256 themselves, so rollback is pointing `releaseBase` back at upstream. It
+isn't imported by `nixosModules.default` — a client doesn't need an nginx
+option surface, and a cache host doesn't need Claude Code.
+
+```nix
+# the cache host
+imports = [ nix-claude-drip.nixosModules.cache ];
+services.claude-code-cache = {
+  enable = true;
+  listenAddress = "0.0.0.0";  # loopback by default; it's plain HTTP with no auth
+  openFirewall = true;
+};
+
+# every client
+services.claude-code.releaseBase = "http://cache.example.net:8502";
+```
+
+| key | default | |
+|---|---|---|
+| `listenAddress` / `port` | `"127.0.0.1"` / `8502` | its own socket, no name-based routing |
+| `upstream` | the Anthropic channel | point it at another cache to chain them |
+| `cacheDir` | `/var/cache/claude-code-cache` | created and unsandboxed for nginx |
+| `maxSize` / `inactive` | `"2g"` / `"7d"` | disuse reclaims; the size cap is a backstop |
+| `channelTtl` | `"1m"` | how fast the fleet notices a release |
+| `channels` | `[ "latest" "stable" ]` | anything else is cached as immutable |
+
+Two more knobs on the client module:
+
+| key | default | |
+|---|---|---|
+| `prefetch` | `false` | fetch once at boot, per user in `users`, so nobody's first `claude` blocks on ~262 MiB |
+| `statusLine.refreshInterval` | `1` | seconds per statusline repaint; `null` omits the key |
+
+`prefetch` is orthogonal to `updateTimer` — one-shot at boot versus recurring
+refresh, same lock, enable either or both — and like the timer it needs `users`.
+Raise `refreshInterval` (or set it to `null`) if you swap in a slow custom
+`statusLine.command`: a command that outlives the interval is aborted by the
+next tick and renders *nothing*.
+
+**No systemd user manager? Set `users`.** `settings.json` normally arrives via
+user activation, which is a `systemd --user` unit — so it never runs on a host
+where no user manager is started: sshd with `UsePAM = false`, a container, an
+image with no logind. The symptom is lopsided rather than obviously missing:
+onboarding and trust look fine (they're launcher-side), while everything that
+lives only in `settings.json` — the fullscreen TUI, the statusline,
+`effortLevel`, the env defaults — silently doesn't happen. Naming users in
+`users` installs the same file from a system unit too, which needs no session.
 
 `claude` is the self-updating launcher · `claude-update` forces a check ·
 `claude-hint` prints just the update indicator (for your own statusline).

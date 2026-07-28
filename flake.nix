@@ -53,6 +53,13 @@
 
       nixosModules.default = import ./nixos;
 
+      # The host-side pull-through cache for the release channel. Deliberately
+      # NOT imported by nixosModules.default: a client machine has no reason to
+      # grow an nginx option surface it will never use, and a cache host has no
+      # reason to run Claude Code. Import it where you want the cache, then
+      # point the clients' `releaseBase` at it.
+      nixosModules.cache = import ./nixos/cache.nix;
+
       # `nix flake check` builds every CLI — which runs shellcheck on each.
       checks = forAllSystems (system: mkBins system);
 
