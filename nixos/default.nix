@@ -215,7 +215,7 @@ in
       description = ''
         Layer claude-drip's curated settings.json defaults UNDER your
         `settings` (which override them):
-          effortLevel = "high";
+          effortLevel = "xhigh";
           skipDangerousModePermissionPrompt = true;
           disableClaudeAiConnectors = true;           # no claude.ai MCP connectors
           terminalProgressBarEnabled = true;          # OSC 9;4 terminal progress

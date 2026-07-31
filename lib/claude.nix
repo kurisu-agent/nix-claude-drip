@@ -731,7 +731,7 @@ let
   # mkSettings's `opinionated` flag, or by reading this set directly).
   opinionatedDefaults = {
     model = "claude-fable-5";
-    effortLevel = "high";
+    effortLevel = "xhigh";
     skipDangerousModePermissionPrompt = true;
     disableClaudeAiConnectors = true;
     terminalProgressBarEnabled = true;

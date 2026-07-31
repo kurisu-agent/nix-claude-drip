@@ -55,7 +55,7 @@ On by default (`opinionatedDefaults = true`), layered *under* your own `settings
 
 | key | value | |
 |---|---|---|
-| `effortLevel` | `"high"` | persisted reasoning effort |
+| `effortLevel` | `"xhigh"` | persisted reasoning effort |
 | `tui` | `"fullscreen"` | fullscreen renderer |
 | `terminalProgressBarEnabled` | `true` | terminal taskbar progress |
 | `skipDangerousModePermissionPrompt` | `true` | no bypass-mode confirm |
