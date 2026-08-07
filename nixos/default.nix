@@ -304,17 +304,16 @@ in
 
     beads = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = false;
       description = ''
-        Ship beads — the git-backed issue tracker / agent memory — as part of
-        the default stack: nixpkgs' `bd` CLI on PATH plus the official
-        `beads@beads-marketplace` plugin (slash commands, skills, and the
-        SessionStart/PreCompact hooks running `bd prime`), the plugin fetched
-        and refreshed by Claude Code at runtime like the others. Don't also
-        run `bd setup claude` — the plugin already carries the hooks, and a
-        second hook would prime every session twice (current bd detects the
-        plugin and skips its own hook, so nothing breaks if you do). Set
-        false to drop both the package and the plugin.
+        Ship beads — the git-backed issue tracker / agent memory: nixpkgs'
+        `bd` CLI on PATH plus the official `beads@beads-marketplace` plugin
+        (slash commands, skills, and the SessionStart/PreCompact hooks
+        running `bd prime`), the plugin fetched and refreshed by Claude Code
+        at runtime like the others. Don't also run `bd setup claude` — the
+        plugin already carries the hooks, and a second hook would prime every
+        session twice (current bd detects the plugin and skips its own hook,
+        so nothing breaks if you do).
       '';
     };
 
