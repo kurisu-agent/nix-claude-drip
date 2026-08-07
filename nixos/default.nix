@@ -40,17 +40,28 @@ let
     autoCheck = cfg.autoUpdate;
   };
 
-  launcher = claudeLib.mkLauncher (commonArgs // { inherit (cfg) hideAccount autoTrust autoOnboard; });
+  launcher = claudeLib.mkLauncher (
+    commonArgs // { inherit (cfg) hideAccount autoTrust autoOnboard; }
+  );
   hint = claudeLib.mkHint commonArgs;
+
+  # The dedicated plugin knobs compile to plain settings.json keys, layered
+  # between the curated defaults and cfg.settings — additive over the default
+  # plugins, and still vetoable per key from `settings.enabledPlugins`.
+  pluginSettings =
+    lib.optionalAttrs (cfg.marketplaces != { }) { extraKnownMarketplaces = cfg.marketplaces; }
+    // lib.optionalAttrs (cfg.plugins != [ ]) { enabledPlugins = lib.genAttrs cfg.plugins (_: true); };
 
   # Curated defaults (from the shared lib) layered UNDER cfg.settings, then
   # the dedicated `theme` knob on top (so `services.claude-code.theme` wins
   # over a `settings.theme` and stays in sync with the statusline flavour).
   mergedSettings =
-    lib.recursiveUpdate (lib.optionalAttrs cfg.opinionatedDefaults claudeLib.opinionatedDefaults) cfg.settings
+    lib.recursiveUpdate (lib.recursiveUpdate (lib.optionalAttrs cfg.opinionatedDefaults claudeLib.opinionatedDefaults) pluginSettings) cfg.settings
     // lib.optionalAttrs (cfg.theme != null) { theme = cfg.theme; };
 
-  statusline = claudeLib.mkStatusBin (commonArgs // { effortLevel = mergedSettings.effortLevel or null; });
+  statusline = claudeLib.mkStatusBin (
+    commonArgs // { effortLevel = mergedSettings.effortLevel or null; }
+  );
 
   manageSettings = cfg.statusLine.enable || mergedSettings != { };
 
@@ -215,12 +226,20 @@ in
       description = ''
         Layer claude-drip's curated settings.json defaults UNDER your
         `settings` (which override them):
+          model = "claude-fable-5";
           effortLevel = "xhigh";
+          tui = "fullscreen";
           skipDangerousModePermissionPrompt = true;
           disableClaudeAiConnectors = true;           # no claude.ai MCP connectors
           terminalProgressBarEnabled = true;          # OSC 9;4 terminal progress
           env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
           env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";  # telemetry/Sentry/feedback/surveys off
+          env.CLAUDE_CODE_NO_FLICKER = "1";
+          extraKnownMarketplaces.claude-plugins-official = ...;  # official Anthropic marketplace
+          enabledPlugins."skill-creator@claude-plugins-official" = true;
+          enabledPlugins."feature-dev@claude-plugins-official" = true;
+        The plugin content is fetched and refreshed by Claude Code itself
+        under ~/.claude/plugins — only the declaration is nix-managed.
         Set false for a clean slate.
       '';
     };
@@ -233,6 +252,38 @@ in
         `opinionatedDefaults` and under the module-owned `statusLine` (which
         always wins). Your keys (incl. env) survive. `effortLevel` here also
         drives the statusline glyph.
+      '';
+    };
+
+    plugins = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "commit-commands@claude-plugins-official" ];
+      description = ''
+        Extra Claude Code plugins, each as a `"<plugin>@<marketplace>"`
+        string, written to settings.json's `enabledPlugins` on top of the
+        opinionated defaults (skill-creator and feature-dev from the official
+        Anthropic marketplace). Only the declaration lives in nix: Claude Code
+        fetches the plugin content itself at runtime into ~/.claude/plugins,
+        so skills stay current independently of your flake pins and reach
+        every project the user opens. Veto a default per key via
+        `settings.enabledPlugins."<plugin>@<marketplace>" = false`, or set
+        `opinionatedDefaults = false` for none at all.
+      '';
+    };
+
+    marketplaces = lib.mkOption {
+      type = with lib.types; attrsOf anything;
+      default = { };
+      example = lib.literalExpression ''
+        { acme-tools.source = { source = "github"; repo = "acme/claude-plugins"; }; }
+      '';
+      description = ''
+        Extra plugin marketplaces, merged into settings.json's
+        `extraKnownMarketplaces`. The official `claude-plugins-official`
+        marketplace is already declared by the opinionated defaults. Key each
+        entry by the marketplace's canonical name so it merges with a copy
+        Claude Code may have auto-registered instead of cloning twice.
       '';
     };
 

@@ -19,22 +19,42 @@ let
       hexDigit =
         c:
         {
-          "0" = 0; "1" = 1; "2" = 2; "3" = 3; "4" = 4;
-          "5" = 5; "6" = 6; "7" = 7; "8" = 8; "9" = 9;
-          "a" = 10; "A" = 10; "b" = 11; "B" = 11;
-          "c" = 12; "C" = 12; "d" = 13; "D" = 13;
-          "e" = 14; "E" = 14; "f" = 15; "F" = 15;
+          "0" = 0;
+          "1" = 1;
+          "2" = 2;
+          "3" = 3;
+          "4" = 4;
+          "5" = 5;
+          "6" = 6;
+          "7" = 7;
+          "8" = 8;
+          "9" = 9;
+          "a" = 10;
+          "A" = 10;
+          "b" = 11;
+          "B" = 11;
+          "c" = 12;
+          "C" = 12;
+          "d" = 13;
+          "D" = 13;
+          "e" = 14;
+          "E" = 14;
+          "f" = 15;
+          "F" = 15;
         }
         .${c};
       hexByte = s: 16 * (hexDigit (builtins.substring 0 1 s)) + (hexDigit (builtins.substring 1 1 s));
       stripHash =
-        s: if builtins.substring 0 1 s == "#" then builtins.substring 1 (builtins.stringLength s - 1) s else s;
+        s:
+        if builtins.substring 0 1 s == "#" then builtins.substring 1 (builtins.stringLength s - 1) s else s;
     in
     hex:
     let
       h = stripHash hex;
     in
-    "${toString (hexByte (builtins.substring 0 2 h))};${toString (hexByte (builtins.substring 2 2 h))};${toString (hexByte (builtins.substring 4 2 h))}";
+    "${toString (hexByte (builtins.substring 0 2 h))};${
+      toString (hexByte (builtins.substring 2 2 h))
+    };${toString (hexByte (builtins.substring 4 2 h))}";
 
   ccHome = "$HOME/.claude/cc";
 
@@ -54,8 +74,7 @@ let
   # attribute reads as a faint grey on a dark terminal, but on a light one
   # it washes the dark default foreground out to near-invisible — so light
   # themes use an explicit readable grey (palette.muted) instead.
-  dimSeq =
-    if variant == "latte" then "\\033[38;2;${hexToRgbCsv palette.muted}m" else "\\033[2m";
+  dimSeq = if variant == "latte" then "\\033[38;2;${hexToRgbCsv palette.muted}m" else "\\033[2m";
 
   # Full color set for the prompt (ACCENT/BRANCH/DIM + the hint colors).
   colorVars = ''
@@ -293,7 +312,7 @@ let
 
         ${
           if pinVersion != null then
-            ''latest=${lib.escapeShellArg pinVersion}''
+            "latest=${lib.escapeShellArg pinVersion}"
           else
             ''latest="$(curl -fsSL --max-time 10 "$base/${channel}" || true)"''
         }
@@ -516,11 +535,13 @@ let
     }:
     pkgs.writeShellApplication {
       name = "claude";
-      runtimeInputs = with pkgs; [
-        coreutils
-        ripgrep
-      ]
-      ++ lib.optional (autoTrust || autoOnboard) jq;
+      runtimeInputs =
+        with pkgs;
+        [
+          coreutils
+          ripgrep
+        ]
+        ++ lib.optional (autoTrust || autoOnboard) jq;
       text = ''
         export DISABLE_AUTOUPDATER=1
         export USE_BUILTIN_RIPGREP=0
@@ -741,6 +762,23 @@ let
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
       CLAUDE_CODE_NO_FLICKER = "1";
     };
+    # Anthropic's official plugins, by declaration only — Claude Code clones
+    # the marketplace and plugin content itself under ~/.claude/plugins, so
+    # nothing is vendored into the nix store and the content tracks upstream
+    # instead of a flake pin. The marketplace entry uses the canonical name so
+    # it merges with the copy Claude auto-registers on first interactive
+    # launch rather than cloning twice; declaring it here keeps a headless
+    # first run deterministic. Caveat: DISABLE_NONESSENTIAL_TRAFFIC above also
+    # switches off Claude's plugin auto-update check, so an installed
+    # marketplace clone refreshes only on `/plugin marketplace update`.
+    extraKnownMarketplaces.claude-plugins-official.source = {
+      source = "github";
+      repo = "anthropics/claude-plugins-official";
+    };
+    enabledPlugins = {
+      "skill-creator@claude-plugins-official" = true;
+      "feature-dev@claude-plugins-official" = true;
+    };
   };
 
   # mkSettings — ~/.claude/settings.json. Layering, low → high precedence:
@@ -781,8 +819,9 @@ let
         // lib.optionalAttrs (refreshInterval != null) { inherit refreshInterval; };
       };
     in
-    pkgs.writeText "claude-drip-settings.json"
-      (builtins.toJSON (lib.recursiveUpdate (lib.recursiveUpdate base settings) managed));
+    pkgs.writeText "claude-drip-settings.json" (
+      builtins.toJSON (lib.recursiveUpdate (lib.recursiveUpdate base settings) managed)
+    );
 in
 {
   inherit

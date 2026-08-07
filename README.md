@@ -62,11 +62,29 @@ On by default (`opinionatedDefaults = true`), layered *under* your own `settings
 | `env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | `"1"` | agent teams |
 | `env.CLAUDE_CODE_NO_FLICKER` | `"1"` | flicker-free fullscreen |
 | `env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `"1"` | telemetry / Sentry / surveys off |
+| `extraKnownMarketplaces` | `claude-plugins-official` | official Anthropic plugin marketplace |
+| `enabledPlugins` | `skill-creator`, `feature-dev` | official skills, in every project |
 
 Plus two launcher-side knobs: **`hideAccount`** (`IS_DEMO=1` — hides your account
 on the banner) and **`autoTrust`** (pre-trusts the cwd so the statusline runs
 despite the hidden trust dialog). Override any single key via `settings`, or set
 `opinionatedDefaults = false` for a clean slate.
+
+## Plugins & skills
+
+Official Anthropic skills arrive the same way the binary does: **declared in
+nix, fetched by Claude itself**. The defaults enable `skill-creator` and
+`feature-dev` from the official marketplace via settings.json's
+`enabledPlugins`; Claude Code clones the marketplace under `~/.claude/plugins`
+and serves the skills to every project — nothing vendored into the nix store,
+no flake pin going stale. Add more with the module's `plugins` /
+`marketplaces` options, or veto a default per key
+(`settings.enabledPlugins."feature-dev@claude-plugins-official" = false`).
+
+One interaction to know: `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (also an
+opinionated default) turns off Claude's plugin auto-update check along with
+telemetry, so an installed marketplace clone refreshes only when you run
+`/plugin marketplace update` in a session.
 
 ## Use it
 
