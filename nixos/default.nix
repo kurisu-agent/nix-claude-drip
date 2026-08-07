@@ -584,21 +584,11 @@ in
             # + daemon.
             export GUMBO_SESSION="$key"
             export GUMBO_ADDR="${cfg.gumbo.addr}"
-            ${lib.optionalString (!cfg.gumbo.global) ''
-              # yolo-scoped routing: only THIS launch talks to the gateway.
-              # KNOWN CAVEAT: these are `export`ed into the interactive shell
-              # and contained only by the `exec claude` below. An interactive
-              # shell survives a FAILED exec (launcher transiently off PATH,
-              # claude not executable), and then ANTHROPIC_BASE_URL + the fake
-              # CLAUDE_CODE_OAUTH_TOKEN linger, so the next PLAIN `claude` in
-              # that same shell misroutes through the loopback gateway with the
-              # placeholder token. Rare (exec almost never fails) and cured by a
-              # new shell; a full fix is prefix-scoping the vars onto the exec
-              # line (`ANTHROPIC_BASE_URL=... exec claude ...`) so they never
-              # enter the shell at all.
-              export ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}"
-              export CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}"
-            ''}
+            # yolo-scoped routing (!global) is prefix-scoped onto the exec below
+            # via `env`, NOT exported here -- so a failed exec cannot leave
+            # ANTHROPIC_BASE_URL + the placeholder token lingering in the shell
+            # to misroute the next plain `claude`. Global routing lives in
+            # settings.json instead.
             # `yolo <alias>` (e.g. `yolo kimi`): resolve model/env from gumbo
             # config (no daemon needed) and drop the alias from the args. Attempt
             # only when arg 1 exists and is not a flag ([ "''${1#-}" = "$1" ] is
@@ -614,7 +604,7 @@ in
               fi
             fi
 
-            exec claude --dangerously-skip-permissions "$@"
+            exec ${lib.optionalString (!cfg.gumbo.global) ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ''}claude --dangerously-skip-permissions "$@"
           }
         ''
       else
