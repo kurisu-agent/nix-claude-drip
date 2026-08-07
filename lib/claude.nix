@@ -747,6 +747,51 @@ let
       '';
     };
 
+  # mkGumboStatusline — `claude-statusline-gumbo`: wrap an inner statusline
+  # with a gumbo session segment. Claude pipes the status JSON on stdin;
+  # capture it once, feed it UNCHANGED to the inner command, and append
+  # `gumbo status --format line` for this launch's key. The gumbo call is
+  # time-boxed and fail-open (timeout / down daemon / missing `gumbo` → empty
+  # segment → the inner line stands alone), so the row is never blanked — the
+  # refreshInterval cliff mkSettings documents. `--addr` is passed explicitly
+  # so the segment never depends on gumbo's config being readable (`status`
+  # tolerates a missing config; only `resolve` needs it).
+  mkGumboStatusline =
+    {
+      innerCommand,
+      gumboBin ? "gumbo",
+      addr,
+      alwaysShow ? false,
+      timeout ? "0.3",
+    }:
+    pkgs.writeShellApplication {
+      name = "claude-statusline-gumbo";
+      runtimeInputs = [ pkgs.coreutils ]; # timeout, cat
+      # NOT errexit/pipefail: a non-zero inner statusline or gumbo call must not
+      # abort and blank the row. nounset matches the inner statusline's `set -u`.
+      bashOptions = [ "nounset" ];
+      text = ''
+        input=$(cat)
+        base=$(printf '%s' "$input" | ${innerCommand})
+
+        seg=""
+        # Non-global: only render for a real yolo launch (GUMBO_SESSION set) so
+        # a plain, un-routed claude shows no gumbo info. Global (alwaysShow):
+        # always render (a plain claude routes upstream as key "default").
+        if [ -n "''${GUMBO_SESSION:-}" ] || ${lib.boolToString alwaysShow}; then
+          seg=$(timeout ${timeout} ${gumboBin} --addr ${lib.escapeShellArg addr} \
+                  status --session "''${GUMBO_SESSION:-default}" --format line \
+                  2>/dev/null || true)
+        fi
+
+        if [ -n "$seg" ]; then
+          printf '%s  %s' "$base" "$seg" # append, two-space separator
+        else
+          printf '%s' "$base"
+        fi
+      '';
+    };
+
   # The curated, opinionated settings.json defaults — the single source of
   # truth, shared by the NixOS module and any external consumer (via
   # mkSettings's `opinionated` flag, or by reading this set directly).
@@ -829,6 +874,7 @@ in
     mkLauncher
     mkHint
     mkStatusBin
+    mkGumboStatusline
     mkSettings
     opinionatedDefaults
     ;

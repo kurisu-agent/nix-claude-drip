@@ -67,11 +67,31 @@ let
     // lib.optionalAttrs (cfg.plugins != [ ]) { enabledPlugins = lib.genAttrs cfg.plugins (_: true); }
   );
 
+  # gumbo (multi-account gateway) client wiring. Absolute `${pkg}/bin/gumbo`
+  # when a package is given — PATH-independent, so the yolo function and the
+  # statusline wrapper work regardless of the interactive PATH — else the bare
+  # word, expecting `gumbo` on PATH (e.g. from services.gumbo).
+  gumboBin = if cfg.gumbo.package == null then "gumbo" else lib.getExe' cfg.gumbo.package "gumbo";
+
+  # GLOBAL routing: the two loopback env vars go into settings.env (merged
+  # UNDER cfg.settings, so still overridable), so EVERY claude routes through
+  # the gateway. Empty unless gumbo.enable && gumbo.global — yolo-scoped mode
+  # keeps them out of settings and exports them per-launch in the function.
+  gumboSettings = lib.optionalAttrs (cfg.gumbo.enable && cfg.gumbo.global) {
+    env = {
+      ANTHROPIC_BASE_URL = "http://${cfg.gumbo.addr}";
+      CLAUDE_CODE_OAUTH_TOKEN = cfg.gumbo.placeholderToken;
+    };
+  };
+
   # Curated defaults (from the shared lib) layered UNDER cfg.settings, then
   # the dedicated `theme` knob on top (so `services.claude-code.theme` wins
   # over a `settings.theme` and stays in sync with the statusline flavour).
+  # Precedence low → high: opinionatedDefaults < pluginSettings < gumboSettings
+  # < cfg.settings, then theme. recursiveUpdate deep-merges `env`, so gumbo's
+  # keys join the curated env defaults and stay vetoable via settings.env.
   mergedSettings =
-    lib.recursiveUpdate (lib.recursiveUpdate (lib.optionalAttrs cfg.opinionatedDefaults claudeLib.opinionatedDefaults) pluginSettings) cfg.settings
+    lib.recursiveUpdate (lib.recursiveUpdate (lib.recursiveUpdate (lib.optionalAttrs cfg.opinionatedDefaults claudeLib.opinionatedDefaults) pluginSettings) gumboSettings) cfg.settings
     // lib.optionalAttrs (cfg.theme != null) { theme = cfg.theme; };
 
   statusline = claudeLib.mkStatusBin (
@@ -80,13 +100,34 @@ let
 
   manageSettings = cfg.statusLine.enable || mergedSettings != { };
 
-  statusLineCommand =
+  # What the statusline would be WITHOUT gumbo: null when off, the user's
+  # custom command when set, else the built-in. Both honour the stdin → one
+  # line contract, so the gumbo wrapper can wrap either uniformly.
+  baseStatusCommand =
     if !cfg.statusLine.enable then
       null
     else if cfg.statusLine.command != null then
       toString cfg.statusLine.command
     else
       "${statusline}/bin/claude-statusline";
+
+  # Wrap the base statusline with the gumbo session segment. Lazy: this is only
+  # forced when selected below, so the null-base branch (statusLine off) never
+  # reaches mkGumboStatusline's innerCommand — a null is never interpolated.
+  gumboStatusline = claudeLib.mkGumboStatusline {
+    innerCommand = baseStatusCommand;
+    inherit gumboBin;
+    inherit (cfg.gumbo) addr;
+    alwaysShow = cfg.gumbo.global;
+  };
+
+  statusLineCommand =
+    if baseStatusCommand == null then
+      null # statusLine off → no segment
+    else if cfg.gumbo.enable && cfg.gumbo.sessionStatusline then
+      "${gumboStatusline}/bin/claude-statusline-gumbo"
+    else
+      baseStatusCommand; # gumbo off → byte-identical to before
 
   settingsFile = claudeLib.mkSettings {
     settings = mergedSettings;
@@ -409,6 +450,76 @@ in
         session.
       '';
     };
+
+    gumbo = {
+      enable = lib.mkEnableOption "route claude through a gumbo multi-account gateway";
+
+      package = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = null;
+        example = lib.literalExpression "inputs.gumbo.packages.\${system}.default";
+        description = ''
+          The gumbo package providing the `gumbo` CLI (resolve/status/ls/use).
+          null (default) expects `gumbo` already on PATH — e.g. supplied by the
+          gumbo flake's own nixosModule (services.gumbo) at the system level.
+          When set, this module puts it on PATH and uses its absolute
+          `''${package}/bin/gumbo` in the yolo function and the statusline
+          wrapper, so both work regardless of the interactive PATH.
+        '';
+      };
+
+      addr = lib.mkOption {
+        type = lib.types.str;
+        default = "127.0.0.1:8787"; # matches gumbo's DEFAULT_ADDR
+        example = "127.0.0.1:8080";
+        description = ''
+          host:port of the running gumbo daemon's loopback listener (its
+          settings.addr). Used to build ANTHROPIC_BASE_URL (http://<addr>) and
+          as the `--addr` the statusline segment queries. This module only
+          wires the CLIENT side; a `gumbo serve` must already be bound here
+          (see services.gumbo).
+        '';
+      };
+
+      global = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          false (default): yolo-scoped routing — ONLY the `yolo` function
+          points claude at the gateway (per-launch env), so a plain `claude`
+          is untouched.
+          true: route EVERY claude by writing ANTHROPIC_BASE_URL +
+          CLAUDE_CODE_OAUTH_TOKEN into settings.env (merged UNDER
+          `settings`, so still overridable).
+        '';
+      };
+
+      placeholderToken = lib.mkOption {
+        type = lib.types.str;
+        default = "gumbo-placeholder-not-a-real-token";
+        description = ''
+          A clearly-fake CLAUDE_CODE_OAUTH_TOKEN. It exists only so Claude Code
+          considers itself authenticated and sends the request to the loopback
+          gateway; gumbo injects the real per-account credential upstream, so
+          this is never a secret and never leaves the box. Override only if a
+          Claude Code build rejects its shape — a prefix-shaped but obviously
+          fake value like `sk-ant-oat01-gumbo-placeholder` satisfies both a
+          prefix check and "clearly fake".
+        '';
+      };
+
+      sessionStatusline = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Append a gumbo segment (`gumbo status --format line`: the account
+          this launch's requests land on, plus 5h/7d headroom) to the
+          statusline, keyed by the launch's session key. Time-boxed and
+          fail-open, so it never blanks the row. No effect when
+          statusLine.enable = false.
+        '';
+      };
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -424,7 +535,8 @@ in
       hint
     ]
     ++ lib.optional cfg.installUpdateCli updater
-    ++ lib.optional cfg.beads pkgs.beads;
+    ++ lib.optional cfg.beads pkgs.beads
+    ++ lib.optional (cfg.gumbo.enable && cfg.gumbo.package != null) cfg.gumbo.package;
 
     # settings.json, delivery path #1 — user activation. Runs for every user
     # with a systemd user manager, including ones not named in `users`, which
@@ -436,9 +548,70 @@ in
       '';
     };
 
-    environment.interactiveShellInit = lib.mkIf cfg.yoloAlias ''
-      alias yolo='claude --dangerously-skip-permissions'
-    '';
+    # `yolo`. Without gumbo it stays the plain alias. With gumbo it becomes a
+    # function that mints a per-launch session key, routes this launch at the
+    # loopback gateway (yolo-scoped mode) via a sticky X-Gumbo-Session header,
+    # optionally resolves a `yolo <alias>`, then execs claude. POSIX-portable:
+    # environment.interactiveShellInit is sourced by BOTH bash and zsh (this
+    # box runs zsh), and `name() {}`, `local`, `${1#-}`, `[ ]`, `printf`,
+    # `$RANDOM`, `$$` all behave identically in the two.
+    environment.interactiveShellInit = lib.mkIf cfg.yoloAlias (
+      if cfg.gumbo.enable then
+        ''
+          yolo() {
+            local key frag
+            # Per-launch session key: STABLE for this process (the statusline and
+            # every request from this claude read the same key, so the launch
+            # sticks to one account) and UNIQUE across launches — date seconds +
+            # the interactive shell's pid + RANDOM. A second `yolo` in the same
+            # shell and second still differs via $RANDOM. Chars are [a-z0-9-]:
+            # valid in an HTTP header value and in the ?session= query.
+            key="yolo-$(date +%s)-$$-$RANDOM"
+
+            # Sticky selector header. ANTHROPIC_CUSTOM_HEADERS is newline-
+            # separated `Name: Value` pairs; preserve any pre-existing value by
+            # newline-appending. printf builds the newline (no literal newline in
+            # the nix source, and command substitution strips only TRAILING
+            # newlines, so the interior one survives).
+            if [ -n "''${ANTHROPIC_CUSTOM_HEADERS:-}" ]; then
+              ANTHROPIC_CUSTOM_HEADERS="$(printf '%s\nX-Gumbo-Session: %s' "$ANTHROPIC_CUSTOM_HEADERS" "$key")"
+            else
+              ANTHROPIC_CUSTOM_HEADERS="X-Gumbo-Session: $key"
+            fi
+            export ANTHROPIC_CUSTOM_HEADERS
+
+            # Let the statusline segment and any interactive `gumbo` see the key
+            # + daemon.
+            export GUMBO_SESSION="$key"
+            export GUMBO_ADDR="${cfg.gumbo.addr}"
+            ${lib.optionalString (!cfg.gumbo.global) ''
+              # yolo-scoped routing: only THIS launch talks to the gateway.
+              export ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}"
+              export CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}"
+            ''}
+            # `yolo <alias>` (e.g. `yolo kimi`): resolve model/env from gumbo
+            # config (no daemon needed) and drop the alias from the args. Attempt
+            # only when arg 1 exists and is not a flag ([ "''${1#-}" = "$1" ] is
+            # true when $1 has no leading '-'). resolve exits 0 for a known alias;
+            # on ANY other exit (unknown alias, missing gumbo, unreadable config)
+            # we leave args untouched and claude handles arg 1 as usual. SHIFT
+            # before eval so the fragment's `set -- --model M "$@"` rebuilds the
+            # args WITHOUT the alias name.
+            if [ "$#" -gt 0 ] && [ "''${1#-}" = "$1" ]; then
+              if frag="$(${gumboBin} resolve "$1" 2>/dev/null)"; then
+                shift
+                eval "$frag"
+              fi
+            fi
+
+            exec claude --dangerously-skip-permissions "$@"
+          }
+        ''
+      else
+        ''
+          alias yolo='claude --dangerously-skip-permissions'
+        ''
+    );
 
     systemd.services = lib.mkMerge [
       # settings.json, delivery path #2 — a per-user SYSTEM oneshot.
@@ -544,6 +717,16 @@ in
         };
       })
     );
+
+    # Soft nudges, not assertions: sessionStatusline defaults true, so a hard
+    # `sessionStatusline → statusLine.enable` would break any gumbo user who
+    # turns the statusline off. These only fire when gumbo is enabled.
+    warnings =
+      lib.optional (cfg.gumbo.enable && cfg.gumbo.sessionStatusline && !cfg.statusLine.enable)
+        "services.claude-code.gumbo.sessionStatusline is set but statusLine.enable is false; the gumbo segment has no statusline to attach to."
+      ++
+        lib.optional (cfg.gumbo.enable && !cfg.gumbo.global && !cfg.yoloAlias)
+          "services.claude-code.gumbo.enable is set with global = false and yoloAlias = false; nothing routes claude through the gateway (only the yolo function does in non-global mode).";
 
     assertions = [
       {
