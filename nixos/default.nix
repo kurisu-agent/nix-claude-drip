@@ -586,6 +586,16 @@ in
             export GUMBO_ADDR="${cfg.gumbo.addr}"
             ${lib.optionalString (!cfg.gumbo.global) ''
               # yolo-scoped routing: only THIS launch talks to the gateway.
+              # KNOWN CAVEAT: these are `export`ed into the interactive shell
+              # and contained only by the `exec claude` below. An interactive
+              # shell survives a FAILED exec (launcher transiently off PATH,
+              # claude not executable), and then ANTHROPIC_BASE_URL + the fake
+              # CLAUDE_CODE_OAUTH_TOKEN linger, so the next PLAIN `claude` in
+              # that same shell misroutes through the loopback gateway with the
+              # placeholder token. Rare (exec almost never fails) and cured by a
+              # new shell; a full fix is prefix-scoping the vars onto the exec
+              # line (`ANTHROPIC_BASE_URL=... exec claude ...`) so they never
+              # enter the shell at all.
               export ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}"
               export CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}"
             ''}
