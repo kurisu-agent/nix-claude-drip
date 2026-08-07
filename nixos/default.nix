@@ -45,12 +45,27 @@ let
   );
   hint = claudeLib.mkHint commonArgs;
 
+  # beads is a two-part install whose parts only work together: the plugin's
+  # SessionStart/PreCompact hooks run `bd prime`, which needs the CLI on PATH,
+  # and the CLI without the plugin leaves Claude never primed. So one knob
+  # ships both — and it lives here rather than in the shared
+  # opinionatedDefaults because a settings-only consumer (mkSettings outside
+  # this module) has no way to put `bd` on PATH alongside.
+  beadsSettings = lib.optionalAttrs cfg.beads {
+    extraKnownMarketplaces.beads-marketplace.source = {
+      source = "github";
+      repo = "gastownhall/beads";
+    };
+    enabledPlugins."beads@beads-marketplace" = true;
+  };
+
   # The dedicated plugin knobs compile to plain settings.json keys, layered
   # between the curated defaults and cfg.settings — additive over the default
   # plugins, and still vetoable per key from `settings.enabledPlugins`.
-  pluginSettings =
+  pluginSettings = lib.recursiveUpdate beadsSettings (
     lib.optionalAttrs (cfg.marketplaces != { }) { extraKnownMarketplaces = cfg.marketplaces; }
-    // lib.optionalAttrs (cfg.plugins != [ ]) { enabledPlugins = lib.genAttrs cfg.plugins (_: true); };
+    // lib.optionalAttrs (cfg.plugins != [ ]) { enabledPlugins = lib.genAttrs cfg.plugins (_: true); }
+  );
 
   # Curated defaults (from the shared lib) layered UNDER cfg.settings, then
   # the dedicated `theme` knob on top (so `services.claude-code.theme` wins
@@ -287,6 +302,22 @@ in
       '';
     };
 
+    beads = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Ship beads — the git-backed issue tracker / agent memory — as part of
+        the default stack: nixpkgs' `bd` CLI on PATH plus the official
+        `beads@beads-marketplace` plugin (slash commands, skills, and the
+        SessionStart/PreCompact hooks running `bd prime`), the plugin fetched
+        and refreshed by Claude Code at runtime like the others. Don't also
+        run `bd setup claude` — the plugin already carries the hooks, and a
+        second hook would prime every session twice (current bd detects the
+        plugin and skips its own hook, so nothing breaks if you do). Set
+        false to drop both the package and the plugin.
+      '';
+    };
+
     yoloAlias = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -393,7 +424,8 @@ in
       launcher
       hint
     ]
-    ++ lib.optional cfg.installUpdateCli updater;
+    ++ lib.optional cfg.installUpdateCli updater
+    ++ lib.optional cfg.beads pkgs.beads;
 
     # settings.json, delivery path #1 — user activation. Runs for every user
     # with a systemd user manager, including ones not named in `users`, which

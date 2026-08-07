@@ -86,6 +86,13 @@ opinionated default) turns off Claude's plugin auto-update check along with
 telemetry, so an installed marketplace clone refreshes only when you run
 `/plugin marketplace update` in a session.
 
+**beads** — the git-backed issue tracker / memory for coding agents — is in
+the default stack too, as the pair that only works together: nixpkgs' `bd`
+CLI on PATH and the official `beads@beads-marketplace` plugin (slash
+commands, skills, `bd prime` on session start and pre-compaction), the
+plugin fetched fresh by Claude like the rest. `beads = false` drops both.
+Skip `bd setup claude` — the plugin already carries the hooks.
+
 ## Use it
 
 NixOS module:
