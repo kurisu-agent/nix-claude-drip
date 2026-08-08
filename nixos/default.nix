@@ -332,7 +332,12 @@ in
         example = {
           accent = "#FF0099";
         };
-        description = "Re-tint the built-in statusline (accent / branch / success / warning / error).";
+        description = ''
+          Re-tint the built-in statusline: the role colors
+          (accent / branch / success / warning / error / muted) and the
+          per-family model tints (modelFable / modelOpus / modelSonnet /
+          modelHaiku).
+        '';
       };
       refreshInterval = lib.mkOption {
         type = lib.types.nullOr lib.types.ints.positive;

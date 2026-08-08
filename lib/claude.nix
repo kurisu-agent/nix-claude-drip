@@ -76,7 +76,8 @@ let
   # themes use an explicit readable grey (palette.muted) instead.
   dimSeq = if variant == "latte" then "\\033[38;2;${hexToRgbCsv palette.muted}m" else "\\033[2m";
 
-  # Full color set for the prompt (ACCENT/BRANCH/DIM + the hint colors).
+  # Full color set for the prompt (ACCENT/BRANCH/DIM + the model tints + the
+  # hint colors).
   colorVars = ''
     RESET=$'\033[0m'
     ACCENT=$'\033[38;2;${hexToRgbCsv palette.accent}m'
@@ -84,6 +85,10 @@ let
     SUCCESS=$'\033[38;2;${hexToRgbCsv palette.success}m'
     WARNING=$'\033[38;2;${hexToRgbCsv palette.warning}m'
     ERROR=$'\033[38;2;${hexToRgbCsv palette.error}m'
+    M_FABLE=$'\033[38;2;${hexToRgbCsv palette.modelFable}m'
+    M_OPUS=$'\033[38;2;${hexToRgbCsv palette.modelOpus}m'
+    M_SONNET=$'\033[38;2;${hexToRgbCsv palette.modelSonnet}m'
+    M_HAIKU=$'\033[38;2;${hexToRgbCsv palette.modelHaiku}m'
     DIM=$'${dimSeq}'
   '';
 
@@ -723,6 +728,19 @@ let
 
         ${colorVars}
 
+        # Tint the model by family, matched on the display name rather than a
+        # fixed list of ids, so a version bump (opus 4.1 → opus 5) needs no
+        # change here. An unrecognised name — a third-party or renamed model —
+        # falls back to the muted default rather than borrowing a hue that
+        # would read as one of the four.
+        case "$model_lc" in
+          *fable*)  MODEL_COLOR="$M_FABLE"  ;;
+          *opus*)   MODEL_COLOR="$M_OPUS"   ;;
+          *sonnet*) MODEL_COLOR="$M_SONNET" ;;
+          *haiku*)  MODEL_COLOR="$M_HAIKU"  ;;
+          *)        MODEL_COLOR="$DIM"      ;;
+        esac
+
         line="''${ACCENT}''${short_cwd}''${RESET}"
         if [ -n "$branch" ]; then
           line="''${line} ''${BRANCH}''${branch}''${RESET}"
@@ -731,11 +749,11 @@ let
           [ "$modified" -gt 0 ] && line="''${line} ''${WARNING}''${modified}''${RESET}"
           [ "$deleted"  -gt 0 ] && line="''${line} ''${ERROR}''${deleted}''${RESET}"
         fi
+        line="''${line} ''${MODEL_COLOR}''${model_lc}''${RESET}"
         line="''${line} ''${DIM}''${pct}%''${RESET}"
         ${lib.optionalString (effortGlyph != null) ''
           line="''${line} ${effortGlyph}"
         ''}
-        line="''${line} ''${DIM}''${model_lc}''${RESET}"
         [ -n "$running" ] && line="''${line} ''${DIM}''${running}''${RESET}"
 
         ${lib.optionalString (updaterBin != null) ''

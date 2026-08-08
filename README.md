@@ -15,7 +15,9 @@ statusline.
   channel, SHA-256-verified download, atomic swap under `~/.claude/cc`. The
   running session keeps working; the statusline shows `󰇚 47%` while
   downloading, then `󰜉 <ver>` (restart to apply).
-- **Statusline.** `path · git · context% · effort · model · version · update-hint`.
+- **Statusline.** `path · git · model · context% · effort · version · update-hint`,
+  with the model tinted by family — mauve **fable**, red **opus**, yellow
+  **sonnet**, sky **haiku** — so which one you're on reads at a glance.
 - **Fleet-friendly.** Point `releaseBase` at a mirror — or at the pull-through
   cache module in this flake — and the ~262 MiB binary crosses the WAN once
   per release instead of once per machine.
