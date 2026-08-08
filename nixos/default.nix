@@ -142,6 +142,75 @@ let
     inherit (cfg.statusLine) refreshInterval;
   };
 
+  # The `yolo` body. Defined once here because it has two consumers that must
+  # never drift apart: the interactive shell function below, and — under
+  # `gumbo.yoloOnPath` — the same thing as a real command. POSIX-portable, since
+  # environment.interactiveShellInit is sourced by BOTH bash and zsh (`name()
+  # {}`, `local`, `${1#-}`, `[ ]`, `printf`, `$RANDOM`, `$$` behave identically
+  # in the two).
+  gumboYoloFunction = ''
+    yolo() {
+      local key frag
+      # Per-launch session key: STABLE for this process (the statusline and
+      # every request from this claude read the same key, so the launch
+      # sticks to one account) and UNIQUE across launches — date seconds +
+      # the interactive shell's pid + RANDOM. A second `yolo` in the same
+      # shell and second still differs via $RANDOM. Chars are [a-z0-9-]:
+      # valid in an HTTP header value and in the ?session= query.
+      key="yolo-$(date +%s)-$$-$RANDOM"
+
+      # Sticky selector header. ANTHROPIC_CUSTOM_HEADERS is newline-
+      # separated `Name: Value` pairs; preserve any pre-existing value by
+      # newline-appending. printf builds the newline (no literal newline in
+      # the nix source, and command substitution strips only TRAILING
+      # newlines, so the interior one survives).
+      if [ -n "''${ANTHROPIC_CUSTOM_HEADERS:-}" ]; then
+        ANTHROPIC_CUSTOM_HEADERS="$(printf '%s\nX-Gumbo-Session: %s' "$ANTHROPIC_CUSTOM_HEADERS" "$key")"
+      else
+        ANTHROPIC_CUSTOM_HEADERS="X-Gumbo-Session: $key"
+      fi
+      export ANTHROPIC_CUSTOM_HEADERS
+
+      # Let the statusline segment and any interactive `gumbo` see the key
+      # + daemon.
+      export GUMBO_SESSION="$key"
+      export GUMBO_ADDR="${cfg.gumbo.addr}"
+      # yolo-scoped routing (!global) is prefix-scoped onto the exec below
+      # via `env`, NOT exported here -- so a failed exec cannot leave
+      # ANTHROPIC_BASE_URL + the placeholder token lingering in the shell
+      # to misroute the next plain `claude`. Global routing lives in
+      # settings.json instead.
+      # `yolo <alias>` (e.g. `yolo kimi`): resolve model/env from gumbo
+      # config (no daemon needed) and drop the alias from the args. Attempt
+      # only when arg 1 exists and is not a flag ([ "''${1#-}" = "$1" ] is
+      # true when $1 has no leading '-'). resolve exits 0 for a known alias;
+      # on ANY other exit (unknown alias, missing gumbo, unreadable config)
+      # we leave args untouched and claude handles arg 1 as usual. SHIFT
+      # before eval so the fragment's `set -- --model M "$@"` rebuilds the
+      # args WITHOUT the alias name.
+      if [ "$#" -gt 0 ] && [ "''${1#-}" = "$1" ]; then
+        if frag="$(${gumboBin} resolve "$1" 2>/dev/null)"; then
+          shift
+          eval "$frag"
+        fi
+      fi
+
+      exec ${
+        lib.optionalString (!cfg.gumbo.global)
+          ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ''
+      }claude --dangerously-skip-permissions "$@"
+    }
+  '';
+
+  # The same body as an executable, for launchers that never source a profile —
+  # a terminal multiplexer's configured shell, a desktop entry, a script. It
+  # defines the function and then calls it rather than running the body inline,
+  # because `local` is an error at the top level of a script.
+  gumboYoloCommand = pkgs.writeShellScriptBin "yolo" ''
+    ${gumboYoloFunction}
+    yolo "$@"
+  '';
+
   # One unit per name in `users`, named claude-drip-<kind>-<user>. The kind is
   # a parameter rather than baked in because four different units share this
   # shape (update service, its timer, the settings installer, the boot
@@ -566,6 +635,23 @@ in
         '';
       };
 
+      yoloOnPath = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Also install `yolo` as a real command in systemPackages, not only as
+          the interactive shell function `yoloAlias` defines. Same body, so the
+          two cannot disagree; in an interactive shell the function shadows the
+          command and nothing changes.
+
+          For launchers that never source a profile and so never see the
+          function: a multiplexer's configured `default_shell`, a desktop
+          entry, a script. Without this, those launch a claude that is NOT
+          routed through the gateway — silently, since a plain claude works
+          fine, just on your own account.
+        '';
+      };
+
       sessionStatusline = lib.mkOption {
         type = lib.types.bool;
         default = true;
@@ -604,7 +690,8 @@ in
     ]
     ++ lib.optional cfg.installUpdateCli updater
     ++ lib.optional cfg.beads pkgs.beads
-    ++ lib.optional (cfg.gumbo.enable && cfg.gumbo.package != null) cfg.gumbo.package;
+    ++ lib.optional (cfg.gumbo.enable && cfg.gumbo.package != null) cfg.gumbo.package
+    ++ lib.optional (cfg.gumbo.enable && cfg.gumbo.yoloOnPath) gumboYoloCommand;
 
     # settings.json, delivery path #1 — user activation. Runs for every user
     # with a systemd user manager, including ones not named in `users`, which
@@ -616,68 +703,11 @@ in
       '';
     };
 
-    # `yolo`. Without gumbo it stays the plain alias. With gumbo it becomes a
-    # function that mints a per-launch session key, routes this launch at the
-    # loopback gateway (yolo-scoped mode) via a sticky X-Gumbo-Session header,
-    # optionally resolves a `yolo <alias>`, then execs claude. POSIX-portable:
-    # environment.interactiveShellInit is sourced by BOTH bash and zsh (this
-    # box runs zsh), and `name() {}`, `local`, `${1#-}`, `[ ]`, `printf`,
-    # `$RANDOM`, `$$` all behave identically in the two.
+    # `yolo`. Without gumbo it stays the plain alias; with gumbo it is the
+    # session-minting function defined in the let block above.
     environment.interactiveShellInit = lib.mkIf cfg.yoloAlias (
       if cfg.gumbo.enable then
-        ''
-          yolo() {
-            local key frag
-            # Per-launch session key: STABLE for this process (the statusline and
-            # every request from this claude read the same key, so the launch
-            # sticks to one account) and UNIQUE across launches — date seconds +
-            # the interactive shell's pid + RANDOM. A second `yolo` in the same
-            # shell and second still differs via $RANDOM. Chars are [a-z0-9-]:
-            # valid in an HTTP header value and in the ?session= query.
-            key="yolo-$(date +%s)-$$-$RANDOM"
-
-            # Sticky selector header. ANTHROPIC_CUSTOM_HEADERS is newline-
-            # separated `Name: Value` pairs; preserve any pre-existing value by
-            # newline-appending. printf builds the newline (no literal newline in
-            # the nix source, and command substitution strips only TRAILING
-            # newlines, so the interior one survives).
-            if [ -n "''${ANTHROPIC_CUSTOM_HEADERS:-}" ]; then
-              ANTHROPIC_CUSTOM_HEADERS="$(printf '%s\nX-Gumbo-Session: %s' "$ANTHROPIC_CUSTOM_HEADERS" "$key")"
-            else
-              ANTHROPIC_CUSTOM_HEADERS="X-Gumbo-Session: $key"
-            fi
-            export ANTHROPIC_CUSTOM_HEADERS
-
-            # Let the statusline segment and any interactive `gumbo` see the key
-            # + daemon.
-            export GUMBO_SESSION="$key"
-            export GUMBO_ADDR="${cfg.gumbo.addr}"
-            # yolo-scoped routing (!global) is prefix-scoped onto the exec below
-            # via `env`, NOT exported here -- so a failed exec cannot leave
-            # ANTHROPIC_BASE_URL + the placeholder token lingering in the shell
-            # to misroute the next plain `claude`. Global routing lives in
-            # settings.json instead.
-            # `yolo <alias>` (e.g. `yolo kimi`): resolve model/env from gumbo
-            # config (no daemon needed) and drop the alias from the args. Attempt
-            # only when arg 1 exists and is not a flag ([ "''${1#-}" = "$1" ] is
-            # true when $1 has no leading '-'). resolve exits 0 for a known alias;
-            # on ANY other exit (unknown alias, missing gumbo, unreadable config)
-            # we leave args untouched and claude handles arg 1 as usual. SHIFT
-            # before eval so the fragment's `set -- --model M "$@"` rebuilds the
-            # args WITHOUT the alias name.
-            if [ "$#" -gt 0 ] && [ "''${1#-}" = "$1" ]; then
-              if frag="$(${gumboBin} resolve "$1" 2>/dev/null)"; then
-                shift
-                eval "$frag"
-              fi
-            fi
-
-            exec ${
-              lib.optionalString (!cfg.gumbo.global)
-                ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ''
-            }claude --dangerously-skip-permissions "$@"
-          }
-        ''
+        gumboYoloFunction
       else
         ''
           alias yolo='claude --dangerously-skip-permissions'
@@ -796,8 +826,8 @@ in
       lib.optional (cfg.gumbo.enable && cfg.gumbo.sessionStatusline && !cfg.statusLine.enable)
         "services.claude-code.gumbo.sessionStatusline is set but statusLine.enable is false; the gumbo segment has no statusline to attach to."
       ++
-        lib.optional (cfg.gumbo.enable && !cfg.gumbo.global && !cfg.yoloAlias)
-          "services.claude-code.gumbo.enable is set with global = false and yoloAlias = false; nothing routes claude through the gateway (only the yolo function does in non-global mode)."
+        lib.optional (cfg.gumbo.enable && !cfg.gumbo.global && !cfg.yoloAlias && !cfg.gumbo.yoloOnPath)
+          "services.claude-code.gumbo.enable is set with global = false, yoloAlias = false and gumbo.yoloOnPath = false; nothing routes claude through the gateway (only yolo does in non-global mode, and neither form of it is installed)."
       ++
         # `addr` defaults to services.gumbo.addr, so these can only disagree if
         # both were set by hand — at which point claude is pointed somewhere the

@@ -53,6 +53,15 @@ let
     services.claude-code.gumbo.enable = true;
     services.gumbo.addr = "127.0.0.1:9999";
   };
+  # The shape a non-interactive launcher needs: no shell function at all, yolo
+  # only as a command.
+  onPath = eval {
+    services.claude-code.yoloAlias = false;
+    services.claude-code.gumbo = {
+      enable = true;
+      yoloOnPath = true;
+    };
+  };
 
   gumboPkg = on.services.gumbo.package;
   hasPkg = c: lib.elem gumboPkg c.environment.systemPackages;
@@ -86,6 +95,30 @@ let
       && infix "http://127.0.0.1:9999" daemonElsewhere.environment.interactiveShellInit;
     "a matching addr raises no warning" =
       !lib.any (w: infix "differs from services.gumbo.addr" w) on.warnings;
+
+    # yoloOnPath: a real command, same routing, and no warning that nothing
+    # routes just because the shell function is off.
+    "yoloOnPath installs a yolo command" = lib.any (
+      p: (p.pname or p.name or "") == "yolo"
+    ) onPath.environment.systemPackages;
+    # `.text` rather than readFile of the built script: reading the output
+    # would be import-from-derivation, which would drag a full gumbo build into
+    # every evaluation of this check.
+    "the yolo command routes at the gateway" =
+      let
+        yoloPkg = lib.head (
+          lib.filter (p: (p.pname or p.name or "") == "yolo") onPath.environment.systemPackages
+        );
+      in
+      infix "http://${onPath.services.gumbo.addr}" yoloPkg.text;
+    "yoloOnPath silences the nothing-routes warning" =
+      !lib.any (w: infix "nothing routes claude through the gateway" w) onPath.warnings;
+    "the warning still fires when neither form of yolo exists" =
+      lib.any (w: infix "nothing routes claude through the gateway" w)
+        (eval {
+          services.claude-code.yoloAlias = false;
+          services.claude-code.gumbo.enable = true;
+        }).warnings;
 
     # serve = false is the client-only escape hatch.
     "serve = false leaves the daemon off" = !clientOnly.services.gumbo.enable;
