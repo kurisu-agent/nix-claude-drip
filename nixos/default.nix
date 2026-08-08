@@ -6,6 +6,13 @@
 # at boot. On non-NixOS hosts (e.g. glibc devcontainers) consume the flake
 # *package* instead — the binary runs on the system glibc with no module and
 # no nix-ld.
+#
+# `gumboFlake` is the gumbo input, applied by flake.nix ahead of the module
+# args. It is taken here so this module can IMPORT gumbo's own nixosModule:
+# enabling `services.claude-code.gumbo` then brings the daemon up as well as
+# the client wiring, instead of leaving the operator to pin gumbo separately
+# and remember to turn both halves on.
+gumboFlake:
 {
   config,
   lib,
@@ -144,6 +151,15 @@ let
     kind: f: lib.listToAttrs (map (u: lib.nameValuePair "claude-drip-${kind}-${u}" (f u)) cfg.users);
 in
 {
+  # gumbo's own module, for `services.gumbo` (the daemon, its rendered
+  # config.toml, and the `gumbo` package). Unconditional — a NixOS import
+  # cannot depend on config without recursing — but inert: gumbo's module is
+  # all `mkIf cfg.enable`, and its package default is lazy, so a host that
+  # never touches `services.claude-code.gumbo` gains an option surface and
+  # nothing else. Importing here is what lets one `gumbo.enable = true` wire
+  # both halves; see the `gumbo` options below.
+  imports = [ gumboFlake.nixosModules.default ];
+
   options.services.claude-code = {
     enable = lib.mkEnableOption "claude-drip — self-updating native Claude Code";
 
@@ -272,6 +288,18 @@ in
           just a polling rate. If you set a slow custom `statusLine.command`
           (one that shells out to the network, say), raise this above its
           worst-case runtime or set it to null.
+        '';
+      };
+      resolvedCommand = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        internal = true;
+        description = ''
+          Read-only: the command actually written into settings.json, after
+          `command`/built-in selection and any gumbo wrapping. Everything that
+          feeds settings.json is otherwise sealed inside a store path, so this
+          is the only place a host — or a test — can see which statusline it
+          ended up with. Not an input: setting it does nothing.
         '';
       };
     };
@@ -452,32 +480,62 @@ in
     };
 
     gumbo = {
-      enable = lib.mkEnableOption "route claude through a gumbo multi-account gateway";
+      enable = lib.mkEnableOption ''
+        route claude through a gumbo multi-account gateway. Turns on
+        `services.gumbo` too (this module imports gumbo's own module), so one
+        knob gets both the daemon and the client wiring — set
+        `services.gumbo.enable = false` to keep the client half only and point
+        `addr` at a gateway managed elsewhere'';
+
+      serve = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Bring up the gumbo daemon on this host (`services.gumbo.enable`)
+          alongside the client wiring. The default is set with `mkDefault`, so
+          an explicit `services.gumbo.enable` in your own config wins over it
+          either way; this knob exists so a host can say "client only" without
+          having to reach into another module's options.
+
+          Turning it off does NOT change the client half: claude is still
+          pointed at `addr`, which then has to be a gateway bound by something
+          else (another host, a `systemd --user` unit, a hand-run `gumbo serve`).
+        '';
+      };
 
       package = lib.mkOption {
         type = lib.types.nullOr lib.types.package;
-        default = null;
+        default = config.services.gumbo.package;
+        defaultText = lib.literalExpression "config.services.gumbo.package";
         example = lib.literalExpression "inputs.gumbo.packages.\${system}.default";
         description = ''
           The gumbo package providing the `gumbo` CLI (resolve/status/ls/use).
-          null (default) expects `gumbo` already on PATH — e.g. supplied by the
-          gumbo flake's own nixosModule (services.gumbo) at the system level.
-          When set, this module puts it on PATH and uses its absolute
-          `''${package}/bin/gumbo` in the yolo function and the statusline
-          wrapper, so both work regardless of the interactive PATH.
+          Defaults to `services.gumbo.package` — i.e. the build from this
+          flake's own `gumbo` input, the same one the daemon runs — so client
+          and daemon cannot drift apart by default. This module puts it on PATH
+          and uses its absolute `''${package}/bin/gumbo` in the yolo function
+          and the statusline wrapper, so both work regardless of the
+          interactive PATH.
+
+          null means "expect `gumbo` on PATH" and emits the bare word instead:
+          for a host that installs the CLI by some other route.
         '';
       };
 
       addr = lib.mkOption {
         type = lib.types.str;
-        default = "127.0.0.1:8787"; # matches gumbo's DEFAULT_ADDR
+        default = config.services.gumbo.addr; # itself gumbo's DEFAULT_ADDR
+        defaultText = lib.literalExpression "config.services.gumbo.addr";
         example = "127.0.0.1:8080";
         description = ''
-          host:port of the running gumbo daemon's loopback listener (its
-          settings.addr). Used to build ANTHROPIC_BASE_URL (http://<addr>) and
-          as the `--addr` the statusline segment queries. This module only
-          wires the CLIENT side; a `gumbo serve` must already be bound here
-          (see services.gumbo).
+          host:port of the running gumbo daemon's loopback listener. Used to
+          build ANTHROPIC_BASE_URL (http://<addr>) and as the `--addr` the
+          statusline segment queries.
+
+          Defaults to `services.gumbo.addr` (itself 127.0.0.1:8787), so the
+          daemon's own option is the single place to change the port and the
+          client follows. Set this one only when the gateway is NOT the daemon
+          this module manages — see `serve`.
         '';
       };
 
@@ -523,6 +581,16 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # The daemon half. mkDefault, so an explicit `services.gumbo.enable` in the
+    # host's own config still decides — including turning it back ON when
+    # `serve = false`, or off while the client wiring stays. Guarded by
+    # cfg.gumbo.enable rather than assigned unconditionally so that a host
+    # running gumbo for something other than claude is never overridden here.
+    services.gumbo.enable = lib.mkIf cfg.gumbo.enable (lib.mkDefault cfg.gumbo.serve);
+
+    # Publish what the statusline resolved to (see the option's description).
+    services.claude-code.statusLine.resolvedCommand = statusLineCommand;
+
     # The native binary is a foreign glibc ELF; nix-ld gives NixOS a loader.
     programs.nix-ld.enable = true;
     programs.nix-ld.libraries = with pkgs; [
@@ -604,7 +672,10 @@ in
               fi
             fi
 
-            exec ${lib.optionalString (!cfg.gumbo.global) ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ''}claude --dangerously-skip-permissions "$@"
+            exec ${
+              lib.optionalString (!cfg.gumbo.global)
+                ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ''
+            }claude --dangerously-skip-permissions "$@"
           }
         ''
       else
@@ -726,7 +797,14 @@ in
         "services.claude-code.gumbo.sessionStatusline is set but statusLine.enable is false; the gumbo segment has no statusline to attach to."
       ++
         lib.optional (cfg.gumbo.enable && !cfg.gumbo.global && !cfg.yoloAlias)
-          "services.claude-code.gumbo.enable is set with global = false and yoloAlias = false; nothing routes claude through the gateway (only the yolo function does in non-global mode).";
+          "services.claude-code.gumbo.enable is set with global = false and yoloAlias = false; nothing routes claude through the gateway (only the yolo function does in non-global mode)."
+      ++
+        # `addr` defaults to services.gumbo.addr, so these can only disagree if
+        # both were set by hand — at which point claude is pointed somewhere the
+        # managed daemon is not listening, and every launch fails to connect.
+        lib.optional
+          (cfg.gumbo.enable && config.services.gumbo.enable && cfg.gumbo.addr != config.services.gumbo.addr)
+          "services.claude-code.gumbo.addr (${cfg.gumbo.addr}) differs from services.gumbo.addr (${config.services.gumbo.addr}) while the daemon is managed here; claude will point at an address nothing is bound to.";
 
     assertions = [
       {

@@ -93,6 +93,43 @@ together, nixpkgs' `bd` CLI on PATH and the official
 session start and pre-compaction), the plugin fetched fresh by Claude like
 the rest. Skip `bd setup claude` — the plugin already carries the hooks.
 
+## gumbo — the multi-account gateway
+
+[gumbo](https://github.com/kurisu-agent/gumbo) pools several Claude accounts (and
+Anthropic-compatible upstreams) behind one loopback listener, picking an account
+per launch by 5h/7d headroom. drip **pins gumbo as a flake input and imports its
+module**, so one knob is the whole thing:
+
+```nix
+services.claude-code.gumbo.enable = true;
+```
+
+That brings up `services.gumbo` — the daemon, its rendered `config.toml`, the
+`gumbo` CLI on PATH — *and* the client half: `yolo` becomes a function that mints
+a per-launch session key, stamps it as `X-Gumbo-Session` so the launch sticks to
+one account, and points that one claude at the gateway. Off by default: with the
+knob unset the module is imported but inert, and nothing about a drip host
+changes.
+
+Accounts, providers, routes and aliases are gumbo's own options
+(`services.gumbo.providers`, `.routes`, `.aliases`); credentials are registered
+out of band with `gumbo login` and never live in nix. `yolo kimi` resolves an
+alias's model + env through `gumbo resolve`.
+
+| key | default | |
+|---|---|---|
+| `enable` | `false` | client wiring + the daemon |
+| `serve` | `true` | set `false` for client-only — the gateway is bound elsewhere |
+| `addr` | `services.gumbo.addr` | follows the daemon, so the port is set in one place |
+| `global` | `false` | `true` routes *every* claude, not just `yolo` |
+| `sessionStatusline` | `true` | appends `account · 5h N% · 7d N% left`, time-boxed and fail-open |
+| `package` | `services.gumbo.package` | `null` means "expect `gumbo` on PATH" |
+
+**gumbo is a private repo**, so evaluating this flake — or anything that pins it
+— needs GitHub credentials in `access-tokens`. Without access,
+`inputs.nix-claude-drip.inputs.gumbo.follows` it away and supply
+`services.claude-code.gumbo.package` yourself.
+
 ## Use it
 
 NixOS module:
