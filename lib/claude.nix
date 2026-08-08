@@ -766,7 +766,10 @@ let
     }:
     pkgs.writeShellApplication {
       name = "claude-statusline-gumbo";
-      runtimeInputs = [ pkgs.coreutils ]; # timeout, cat
+      runtimeInputs = [
+        pkgs.coreutils # timeout, cat
+        pkgs.jq # the model name, for the Fable-weekly segment
+      ];
       # NOT errexit/pipefail: a non-zero inner statusline or gumbo call must not
       # abort and blank the row. nounset matches the inner statusline's `set -u`.
       bashOptions = [ "nounset" ];
@@ -779,13 +782,19 @@ let
         # a plain, un-routed claude shows no gumbo info. Global (alwaysShow):
         # always render (a plain claude routes upstream as key "default").
         if [ -n "''${GUMBO_SESSION:-}" ] || ${lib.boolToString alwaysShow}; then
+          # The model in play, so a Fable session always sees its scoped weekly.
+          # Passed even when empty (an unreadable payload is just "not Fable");
+          # gumbo only tests its family, so the display name serves as well as
+          # the id.
+          model=$(printf '%s' "$input" | jq -r '.model.display_name // ""' 2>/dev/null || true)
           seg=$(timeout ${timeout} ${gumboBin} --addr ${lib.escapeShellArg addr} \
                   status --session "''${GUMBO_SESSION:-default}" --format line \
+                  --model "$model" \
                   2>/dev/null || true)
         fi
 
         if [ -n "$seg" ]; then
-          printf '%s  %s' "$base" "$seg" # append, two-space separator
+          printf '%s %s' "$base" "$seg" # append, single-space separator
         else
           printf '%s' "$base"
         fi
