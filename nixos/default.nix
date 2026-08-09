@@ -157,7 +157,7 @@ let
   # parameter, defaulted nowhere: each consumer states which it wants.
   gumboYoloBody = execPrefix: ''
     yolo() {
-      local key frag
+      local key frag gumbo_token
       # Per-launch session key: STABLE for this process (the statusline and
       # every request from this claude read the same key, so the launch
       # sticks to one account) and UNIQUE across launches — date seconds +
@@ -203,9 +203,24 @@ let
         fi
       fi
 
+      # The gateway's shared secret, presented in the CLAUDE_CODE_OAUTH_TOKEN
+      # slot Claude Code already fills -- so the client needs no new concept and
+      # this line is the whole client half of gumbo's auth. It is a FILE, not a
+      # nix value: anything rendered by nix lands in a world-readable
+      # /nix/store, and the threat gumbo's auth exists to stop is precisely
+      # other local uids. Its mode (0640, the store's group) is the boundary.
+      #
+      # Unreadable is not fatal here: fall back to the placeholder and let the
+      # daemon's own 401 explain, since it names the file and the group. A
+      # daemon with `require_auth = false` does not care either way.
+      gumbo_token="${cfg.gumbo.placeholderToken}"
+      if [ -r "${cfg.gumbo.authTokenFile}" ]; then
+        gumbo_token="$(cat "${cfg.gumbo.authTokenFile}")"
+      fi
+
       ${execPrefix}${
         lib.optionalString (!cfg.gumbo.global)
-          ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ''
+          ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="$gumbo_token" ''
       }claude --dangerously-skip-permissions "$@"
     }
   '';
@@ -643,6 +658,23 @@ in
         '';
       };
 
+      authTokenFile = lib.mkOption {
+        type = lib.types.str;
+        default = "${config.services.gumbo.tokensDir}/state/auth-token";
+        defaultText = lib.literalExpression "\"\${config.services.gumbo.tokensDir}/state/auth-token\"";
+        description = ''
+          The gumbo gateway's shared secret, which `yolo` reads at launch and
+          presents as CLAUDE_CODE_OAUTH_TOKEN. The daemon generates it on first
+          start, 0640, owned by the store's group -- so the set of users who can
+          drive the gateway is exactly the set who can already read its
+          credentials, and no other uid on the box can spend the pool or steer
+          it through the control endpoints.
+
+          A file rather than a value on purpose: a nix-rendered secret lands in
+          a world-readable /nix/store, which would defeat the point entirely.
+        '';
+      };
+
       placeholderToken = lib.mkOption {
         type = lib.types.str;
         default = "gumbo-placeholder-not-a-real-token";
@@ -850,6 +882,15 @@ in
       ++
         lib.optional (cfg.gumbo.enable && !cfg.gumbo.global && !cfg.yoloAlias && !cfg.gumbo.yoloOnPath)
           "services.claude-code.gumbo.enable is set with global = false, yoloAlias = false and gumbo.yoloOnPath = false; nothing routes claude through the gateway (only yolo does in non-global mode, and neither form of it is installed)."
+      ++
+        # GLOBAL routing puts CLAUDE_CODE_OAUTH_TOKEN in settings.json, which is
+        # a static file in the user's home. It cannot read the gateway's token
+        # at launch the way `yolo` does, and writing the secret into it would
+        # publish it to every local user -- exactly what gumbo's auth exists to
+        # prevent. So the two are incompatible by construction, not by omission.
+        lib.optional
+          (cfg.gumbo.enable && cfg.gumbo.global && (config.services.gumbo.settings.require_auth or true))
+          "services.claude-code.gumbo.global routes every claude through settings.json, which cannot present gumbo's auth token (a static, world-readable file must not hold a secret). Every request will 401. Use yolo-scoped routing (global = false), or set services.gumbo.requireAuth = false."
       ++
         # `addr` defaults to services.gumbo.addr, so these can only disagree if
         # both were set by hand — at which point claude is pointed somewhere the
