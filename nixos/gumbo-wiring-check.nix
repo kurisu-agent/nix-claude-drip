@@ -41,6 +41,12 @@ let
   infix = needle: hay: lib.hasInfix (noCtx needle) (noCtx hay);
   suffix = needle: hay: lib.hasSuffix (noCtx needle) (noCtx hay);
 
+  # Does this yolo body REPLACE its caller with claude? Matched on the two
+  # shapes the invocation can take (`env`-prefixed when routing is yolo-scoped,
+  # bare when it is global) rather than on "exec", which also appears in the
+  # body's prose.
+  execsClaude = text: infix "exec env " text || infix "exec claude " text;
+
   off = eval { };
   on = eval { services.claude-code.gumbo.enable = true; };
   clientOnly = eval {
@@ -86,6 +92,11 @@ let
       infix "X-Gumbo-Session" on.environment.interactiveShellInit;
     "yolo calls gumbo by absolute path, not by PATH lookup" =
       infix "${gumboPkg}/bin/gumbo resolve" on.environment.interactiveShellInit;
+    # The shell function runs claude as a CHILD. `exec` here would replace the
+    # interactive shell, so `yolo --help` -- claude printing help and exiting --
+    # would close the user's terminal.
+    "the shell function does not exec over the shell" =
+      !execsClaude on.environment.interactiveShellInit;
 
     # The client's addr follows the daemon's, so the port is set in one place.
     "client addr defaults to the daemon's" =
@@ -111,6 +122,16 @@ let
         );
       in
       infix "http://${onPath.services.gumbo.addr}" yoloPkg.text;
+    # The command form is a wrapper with nothing left to do, so it DOES exec --
+    # the opposite of the shell function above, and the reason the body takes
+    # the prefix as a parameter.
+    "the yolo command execs so no wrapper lingers" =
+      let
+        yoloPkg = lib.head (
+          lib.filter (p: (p.pname or p.name or "") == "yolo") onPath.environment.systemPackages
+        );
+      in
+      execsClaude yoloPkg.text;
     "yoloOnPath silences the nothing-routes warning" =
       !lib.any (w: infix "nothing routes claude through the gateway" w) onPath.warnings;
     "the warning still fires when neither form of yolo exists" =

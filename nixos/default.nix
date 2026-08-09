@@ -148,7 +148,14 @@ let
   # environment.interactiveShellInit is sourced by BOTH bash and zsh (`name()
   # {}`, `local`, `${1#-}`, `[ ]`, `printf`, `$RANDOM`, `$$` behave identically
   # in the two).
-  gumboYoloFunction = ''
+  #
+  # `exec` is the ONE thing the two consumers cannot share. In the command form
+  # it is right: the wrapper has nothing left to do and should not linger as a
+  # parent process. In the SHELL FUNCTION form it replaces the interactive shell
+  # itself, so anything that makes claude exit promptly takes the terminal down
+  # with it — `yolo --help` printed help and closed the window. Hence a
+  # parameter, defaulted nowhere: each consumer states which it wants.
+  gumboYoloBody = execPrefix: ''
     yolo() {
       local key frag
       # Per-launch session key: STABLE for this process (the statusline and
@@ -175,11 +182,12 @@ let
       # + daemon.
       export GUMBO_SESSION="$key"
       export GUMBO_ADDR="${cfg.gumbo.addr}"
-      # yolo-scoped routing (!global) is prefix-scoped onto the exec below
-      # via `env`, NOT exported here -- so a failed exec cannot leave
-      # ANTHROPIC_BASE_URL + the placeholder token lingering in the shell
-      # to misroute the next plain `claude`. Global routing lives in
-      # settings.json instead.
+      # yolo-scoped routing (!global) is prefix-scoped onto the claude
+      # invocation below via `env`, NOT exported here -- so a failed
+      # launch cannot leave ANTHROPIC_BASE_URL + the placeholder token
+      # lingering in the shell to misroute the next plain `claude`. That
+      # scoping is the `env` prefix's doing and holds whether or not the
+      # invocation is exec'd. Global routing lives in settings.json.
       # `yolo <alias>` (e.g. `yolo kimi`): resolve model/env from gumbo
       # config (no daemon needed) and drop the alias from the args. Attempt
       # only when arg 1 exists and is not a flag ([ "''${1#-}" = "$1" ] is
@@ -195,19 +203,28 @@ let
         fi
       fi
 
-      exec ${
+      ${execPrefix}${
         lib.optionalString (!cfg.gumbo.global)
           ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ''
       }claude --dangerously-skip-permissions "$@"
     }
   '';
 
+  # Sourced into an interactive shell: NO exec, or the shell dies with claude.
+  # The `env` prefix already scopes the routing env to this one command, so
+  # nothing leaks into the shell either way (that is what the prefix is for,
+  # not the exec).
+  gumboYoloFunction = gumboYoloBody "";
+
   # The same body as an executable, for launchers that never source a profile —
   # a terminal multiplexer's configured shell, a desktop entry, a script. It
   # defines the function and then calls it rather than running the body inline,
-  # because `local` is an error at the top level of a script.
+  # because `local` is an error at the top level of a script. Here `exec` IS
+  # wanted: the wrapper is a process the launcher would otherwise keep around
+  # for the life of the session, and replacing it also puts claude's own pid
+  # where the launcher expects the command it started.
   gumboYoloCommand = pkgs.writeShellScriptBin "yolo" ''
-    ${gumboYoloFunction}
+    ${gumboYoloBody "exec "}
     yolo "$@"
   '';
 
