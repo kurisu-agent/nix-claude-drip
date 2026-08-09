@@ -771,14 +771,20 @@ let
   # `gumbo status --format line` for this launch's key. The gumbo call is
   # time-boxed and fail-open (timeout / down daemon / missing `gumbo` → empty
   # segment → the inner line stands alone), so the row is never blanked — the
-  # refreshInterval cliff mkSettings documents. `--addr` is passed explicitly
-  # so the segment never depends on gumbo's config being readable (`status`
-  # tolerates a missing config; only `resolve` needs it).
+  # refreshInterval cliff mkSettings documents.
+  #
+  # `daemon` is the endpoint to ask — an owner socket path on a workstation, a
+  # `host:port` for a kart door — passed explicitly so the segment does not
+  # depend on gumbo's config being readable (`status` tolerates a missing
+  # config; only `resolve` needs it). NULL means "pass nothing and let the
+  # binary find its own endpoint", which is what a kart needs: its endpoint
+  # arrives on the identity share at runtime and must not be baked into the
+  # guest closure.
   mkGumboStatusline =
     {
       innerCommand,
       gumboBin ? "gumbo",
-      addr,
+      daemon ? null,
       alwaysShow ? false,
       timeout ? "0.3",
     }:
@@ -805,7 +811,9 @@ let
           # gumbo only tests its family, so the display name serves as well as
           # the id.
           model=$(printf '%s' "$input" | jq -r '.model.display_name // ""' 2>/dev/null || true)
-          seg=$(timeout ${timeout} ${gumboBin} --addr ${lib.escapeShellArg addr} \
+          seg=$(timeout ${timeout} ${gumboBin} ${
+            lib.optionalString (daemon != null) "--daemon ${lib.escapeShellArg daemon} "
+          }\
                   status --session "''${GUMBO_SESSION:-default}" --format line \
                   --model "$model" \
                   2>/dev/null || true)

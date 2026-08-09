@@ -57,7 +57,18 @@ let
   };
   daemonElsewhere = eval {
     services.claude-code.gumbo.enable = true;
-    services.gumbo.addr = "127.0.0.1:9999";
+    services.gumbo.listen.localAddr = "127.0.0.1:9999";
+  };
+  # A kart: the endpoint is not known when the closure is built, so nothing may
+  # be baked into the statusline or into yolo's environment. `0136 — Split gumbo
+  # into an engine-free core on lakitu and a credential-free client in the kart,
+  # so `gumbo ls` and `yolo` work inside a guest that never holds a key`.
+  endpointAtRuntime = eval {
+    services.claude-code.gumbo = {
+      enable = true;
+      serve = false;
+      daemon = null;
+    };
   };
   # The shape a non-interactive launcher needs: no shell function at all, yolo
   # only as a command.
@@ -98,14 +109,39 @@ let
     "the shell function does not exec over the shell" =
       !execsClaude on.environment.interactiveShellInit;
 
-    # The client's addr follows the daemon's, so the port is set in one place.
-    "client addr defaults to the daemon's" =
-      on.services.claude-code.gumbo.addr == on.services.gumbo.addr;
-    "moving services.gumbo.addr moves the client with it" =
+    # The client's addr follows the daemon's LOCAL door, so the port is set in
+    # one place. It tracks that door specifically and never the owner socket or
+    # the kart door: the three are different authorities, not three spellings of
+    # one address.
+    "client addr defaults to the daemon's local door" =
+      on.services.claude-code.gumbo.addr == on.services.gumbo.listen.localAddr;
+    "moving services.gumbo.listen.localAddr moves the client with it" =
       daemonElsewhere.services.claude-code.gumbo.addr == "127.0.0.1:9999"
       && infix "http://127.0.0.1:9999" daemonElsewhere.environment.interactiveShellInit;
     "a matching addr raises no warning" =
-      !lib.any (w: infix "differs from services.gumbo.addr" w) on.warnings;
+      !lib.any (w: infix "differs from services.gumbo.listen.localAddr" w) on.warnings;
+
+    # The CONTROL door is the owner socket, not the HTTP address — `yolo` and
+    # the statusline ask the daemon over the door whose mode is the boundary.
+    "the control endpoint defaults to the owner socket" =
+      on.services.claude-code.gumbo.daemon == on.services.gumbo.listen.ownerSocket;
+    "yolo exports the control endpoint, not the relay address" =
+      infix "export GUMBO_DAEMON=\"${on.services.gumbo.listen.ownerSocket}\""
+        on.environment.interactiveShellInit;
+
+    # daemon = null is the kart shape: an endpoint that arrives at runtime.
+    # Asserted on the shell init because that is the one place the rendered text
+    # is reachable from `config` — the statusline wrapper is a store PATH here,
+    # and reading its script would be import-from-derivation, which would drag a
+    # full gumbo build into every evaluation of this check. The two share
+    # `cfg.gumbo.daemon`, so one covers the decision both make.
+    # Matched on the `export`, not on the bare name: the body carries a comment
+    # explaining when the export is emitted, and that comment ships in every
+    # rendering including this one.
+    "a null endpoint bakes no GUMBO_DAEMON into yolo" =
+      !infix "export GUMBO_DAEMON" endpointAtRuntime.environment.interactiveShellInit;
+    "a null endpoint still routes claude at the relay" =
+      infix "X-Gumbo-Session" endpointAtRuntime.environment.interactiveShellInit;
 
     # yoloOnPath: a real command, same routing, and no warning that nothing
     # routes just because the shell function is off.
@@ -121,7 +157,7 @@ let
           lib.filter (p: (p.pname or p.name or "") == "yolo") onPath.environment.systemPackages
         );
       in
-      infix "http://${onPath.services.gumbo.addr}" yoloPkg.text;
+      infix "http://${onPath.services.gumbo.listen.localAddr}" yoloPkg.text;
     # The command form is a wrapper with nothing left to do, so it DOES exec --
     # the opposite of the shell function above, and the reason the body takes
     # the prefix as a parameter.

@@ -15,7 +15,7 @@
     # can `inputs.nix-claude-drip.inputs.gumbo.follows = ...` it away, at the cost
     # of having to supply `services.claude-code.gumbo.package` themselves.
     gumbo = {
-      url = "github:kurisu-agent/gumbo";
+      url = "github:kurisu-agent/gumbo/feat/kart-split";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

@@ -7,15 +7,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1786252418,
-        "narHash": "sha256-IvlLd+gRFzUXl59tJpuCpsfpk7a2sF6D/o7Xrr0hVus=",
+        "lastModified": 1786287864,
+        "narHash": "sha256-wOUMZq7AYsEgm6KRmze24FtRGBNxNvq6X9kBK5I5E2s=",
         "owner": "kurisu-agent",
         "repo": "gumbo",
-        "rev": "e16d3e3e01929b73999b3ca0a0b6448dc4bbeeb7",
+        "rev": "abc95ed974a654ed72c25f25f2cc147f9929e6b1",
         "type": "github"
       },
       "original": {
         "owner": "kurisu-agent",
+        "ref": "feat/kart-split",
         "repo": "gumbo",
         "type": "github"
       }

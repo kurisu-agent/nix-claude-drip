@@ -124,7 +124,7 @@ let
   gumboStatusline = claudeLib.mkGumboStatusline {
     innerCommand = baseStatusCommand;
     inherit gumboBin;
-    inherit (cfg.gumbo) addr;
+    inherit (cfg.gumbo) daemon;
     alwaysShow = cfg.gumbo.global;
   };
 
@@ -157,7 +157,7 @@ let
   # parameter, defaulted nowhere: each consumer states which it wants.
   gumboYoloBody = execPrefix: ''
     yolo() {
-      local key frag gumbo_token
+      local key frag
       # Per-launch session key: STABLE for this process (the statusline and
       # every request from this claude read the same key, so the launch
       # sticks to one account) and UNIQUE across launches — date seconds +
@@ -179,9 +179,11 @@ let
       export ANTHROPIC_CUSTOM_HEADERS
 
       # Let the statusline segment and any interactive `gumbo` see the key
-      # + daemon.
+      # + daemon. GUMBO_DAEMON is exported only when this host knows the
+      # endpoint at build time; inside a kart it does not, and the client reads
+      # it from the identity share instead.
       export GUMBO_SESSION="$key"
-      export GUMBO_ADDR="${cfg.gumbo.addr}"
+      ${lib.optionalString (cfg.gumbo.daemon != null) ''export GUMBO_DAEMON="${cfg.gumbo.daemon}"''}
       # yolo-scoped routing (!global) is prefix-scoped onto the claude
       # invocation below via `env`, NOT exported here -- so a failed
       # launch cannot leave ANTHROPIC_BASE_URL + the placeholder token
@@ -203,24 +205,24 @@ let
         fi
       fi
 
-      # The gateway's shared secret, presented in the CLAUDE_CODE_OAUTH_TOKEN
-      # slot Claude Code already fills -- so the client needs no new concept and
-      # this line is the whole client half of gumbo's auth. It is a FILE, not a
-      # nix value: anything rendered by nix lands in a world-readable
-      # /nix/store, and the threat gumbo's auth exists to stop is precisely
-      # other local uids. Its mode (0640, the store's group) is the boundary.
+      # THE TOKEN IS A PLACEHOLDER AND NOTHING ELSE. It exists so Claude Code
+      # considers itself authenticated and sends the request to the gateway at
+      # all; gumbo attaches the real per-account credential upstream. There is
+      # no shared secret to read any more — gumbo decides what a caller may do
+      # from WHICH LISTENER accepted the connection (an owner unix socket with a
+      # group and a mode, a loopback listener, a kart's bridge door), so a token
+      # in this slot never carried authority and now does not pretend to.
       #
-      # Unreadable is not fatal here: fall back to the placeholder and let the
-      # daemon's own 401 explain, since it names the file and the group. A
-      # daemon with `require_auth = false` does not care either way.
-      gumbo_token="${cfg.gumbo.placeholderToken}"
-      if [ -r "${cfg.gumbo.authTokenFile}" ]; then
-        gumbo_token="$(cat "${cfg.gumbo.authTokenFile}")"
-      fi
-
+      # This used to `cat` an 0640 auth-token file, which was the client half of
+      # a shared-token scheme. That scheme is gone: a token read out of a file is
+      # a bearer credential every process of that group can lift, where a unix
+      # socket's mode is checked by the kernel on every connect and cannot be
+      # copied out of the box at all. `0136 — Split gumbo into an engine-free
+      # core on lakitu and a credential-free client in the kart, so `gumbo ls`
+      # and `yolo` work inside a guest that never holds a key`.
       ${execPrefix}${
         lib.optionalString (!cfg.gumbo.global)
-          ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="$gumbo_token" ''
+          ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ''
       }claude --dangerously-skip-permissions "$@"
     }
   '';
@@ -630,18 +632,54 @@ in
 
       addr = lib.mkOption {
         type = lib.types.str;
-        default = config.services.gumbo.addr; # itself gumbo's DEFAULT_ADDR
-        defaultText = lib.literalExpression "config.services.gumbo.addr";
+        default = config.services.gumbo.listen.localAddr;
+        defaultText = lib.literalExpression "config.services.gumbo.listen.localAddr";
         example = "127.0.0.1:8080";
         description = ''
-          host:port of the running gumbo daemon's loopback listener. Used to
-          build ANTHROPIC_BASE_URL (http://<addr>) and as the `--addr` the
-          statusline segment queries.
+          host:port of the gateway claude dials. Used to build
+          ANTHROPIC_BASE_URL (http://<addr>) and as the `--addr` the statusline
+          segment queries.
 
-          Defaults to `services.gumbo.addr` (itself 127.0.0.1:8787), so the
-          daemon's own option is the single place to change the port and the
-          client follows. Set this one only when the gateway is NOT the daemon
-          this module manages — see `serve`.
+          Defaults to `services.gumbo.listen.localAddr` (itself 127.0.0.1:8787),
+          so the daemon's own option is the single place to change the port and
+          the client follows. Set this one only when the gateway is NOT the
+          daemon this module manages — see `serve`. Inside a kart that is
+          exactly the case: the gateway is a local `gumbo-client serve` relaying
+          to the circuit's kart door, and this points at the relay.
+
+          This tracks the LOCAL door specifically. gumbo has three listeners and
+          they are not interchangeable — the owner unix socket carries authority
+          over every credential in the store, and the kart door is namespaced
+          and attributed per kart — so "the address claude posts to" is the
+          unprivileged loopback one by construction.
+        '';
+      };
+
+      daemon = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = config.services.gumbo.listen.ownerSocket;
+        defaultText = lib.literalExpression "config.services.gumbo.listen.ownerSocket";
+        example = "10.128.0.1:8503";
+        description = ''
+          The daemon endpoint the CLI verbs talk to: an absolute path for an
+          owner unix socket, or `host:port` for a kart door. Passed explicitly
+          to the statusline segment and exported as GUMBO_DAEMON by `yolo`, so
+          neither depends on gumbo's config file being readable.
+
+          Distinct from `addr`, and the distinction is the access model rather
+          than a detail. `addr` is where the HTTP traffic goes — a byte relay
+          claude posts to. This is the CONTROL door, and which door a request
+          arrives on is the whole of what gumbo lets a caller do: the owner
+          socket's group and mode are the boundary around every credential in
+          the store.
+
+          null means "pass nothing, let the binary find its own endpoint". That
+          is what a kart wants: the endpoint arrives on the per-kart identity
+          share at runtime and baking it into the guest closure would make a
+          new kart need config, which is the thing `0136 — Split gumbo into an
+          engine-free core on lakitu and a credential-free client in the kart,
+          so `gumbo ls` and `yolo` work inside a guest that never holds a key`
+          exists to prevent.
         '';
       };
 
@@ -655,23 +693,6 @@ in
           true: route EVERY claude by writing ANTHROPIC_BASE_URL +
           CLAUDE_CODE_OAUTH_TOKEN into settings.env (merged UNDER
           `settings`, so still overridable).
-        '';
-      };
-
-      authTokenFile = lib.mkOption {
-        type = lib.types.str;
-        default = "${config.services.gumbo.tokensDir}/state/auth-token";
-        defaultText = lib.literalExpression "\"\${config.services.gumbo.tokensDir}/state/auth-token\"";
-        description = ''
-          The gumbo gateway's shared secret, which `yolo` reads at launch and
-          presents as CLAUDE_CODE_OAUTH_TOKEN. The daemon generates it on first
-          start, 0640, owned by the store's group -- so the set of users who can
-          drive the gateway is exactly the set who can already read its
-          credentials, and no other uid on the box can spend the pool or steer
-          it through the control endpoints.
-
-          A file rather than a value on purpose: a nix-rendered secret lands in
-          a world-readable /nix/store, which would defeat the point entirely.
         '';
       };
 
@@ -883,21 +904,26 @@ in
         lib.optional (cfg.gumbo.enable && !cfg.gumbo.global && !cfg.yoloAlias && !cfg.gumbo.yoloOnPath)
           "services.claude-code.gumbo.enable is set with global = false, yoloAlias = false and gumbo.yoloOnPath = false; nothing routes claude through the gateway (only yolo does in non-global mode, and neither form of it is installed)."
       ++
-        # GLOBAL routing puts CLAUDE_CODE_OAUTH_TOKEN in settings.json, which is
-        # a static file in the user's home. It cannot read the gateway's token
-        # at launch the way `yolo` does, and writing the secret into it would
-        # publish it to every local user -- exactly what gumbo's auth exists to
-        # prevent. So the two are incompatible by construction, not by omission.
+        # `addr` defaults to services.gumbo.listen.localAddr, so these can only
+        # disagree if both were set by hand — at which point claude is pointed
+        # somewhere the managed daemon is not listening, and every launch fails
+        # to connect.
+        #
+        # THE `global` + require_auth WARNING THAT USED TO SIT HERE IS GONE, and
+        # its disappearance is the point rather than an omission. It said global
+        # routing and the gateway's shared token were incompatible, because
+        # settings.json is a static world-readable file that cannot hold a
+        # secret. gumbo no longer has a shared token: what a caller may do comes
+        # from which listener accepted the connection, so `global = true` is now
+        # an ordinary configuration and the loopback door's mode is the boundary
+        # the token used to pretend to be.
         lib.optional
-          (cfg.gumbo.enable && cfg.gumbo.global && (config.services.gumbo.settings.require_auth or true))
-          "services.claude-code.gumbo.global routes every claude through settings.json, which cannot present gumbo's auth token (a static, world-readable file must not hold a secret). Every request will 401. Use yolo-scoped routing (global = false), or set services.gumbo.requireAuth = false."
-      ++
-        # `addr` defaults to services.gumbo.addr, so these can only disagree if
-        # both were set by hand — at which point claude is pointed somewhere the
-        # managed daemon is not listening, and every launch fails to connect.
-        lib.optional
-          (cfg.gumbo.enable && config.services.gumbo.enable && cfg.gumbo.addr != config.services.gumbo.addr)
-          "services.claude-code.gumbo.addr (${cfg.gumbo.addr}) differs from services.gumbo.addr (${config.services.gumbo.addr}) while the daemon is managed here; claude will point at an address nothing is bound to.";
+          (
+            cfg.gumbo.enable
+            && config.services.gumbo.enable
+            && cfg.gumbo.addr != config.services.gumbo.listen.localAddr
+          )
+          "services.claude-code.gumbo.addr (${cfg.gumbo.addr}) differs from services.gumbo.listen.localAddr (${config.services.gumbo.listen.localAddr}) while the daemon is managed here; claude will point at an address nothing is bound to.";
 
     assertions = [
       {

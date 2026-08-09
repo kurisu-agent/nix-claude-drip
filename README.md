@@ -122,7 +122,8 @@ alias's model + env through `gumbo resolve`.
 |---|---|---|
 | `enable` | `false` | client wiring + the daemon |
 | `serve` | `true` | set `false` for client-only — the gateway is bound elsewhere |
-| `addr` | `services.gumbo.addr` | follows the daemon, so the port is set in one place |
+| `addr` | `services.gumbo.listen.localAddr` | where the HTTP traffic goes; follows the daemon's local door |
+| `daemon` | `services.gumbo.listen.ownerSocket` | the CONTROL door the CLI verbs ask; `null` = let the binary find it (a kart) |
 | `global` | `false` | `true` routes *every* claude, not just `yolo` |
 | `yoloOnPath` | `false` | `yolo` as a real command too, for launchers that never source a profile |
 | `sessionStatusline` | `true` | appends `account · 5h N% · 7d N% left`, time-boxed and fail-open |
