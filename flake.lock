@@ -7,11 +7,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1786215025,
-        "narHash": "sha256-BRM+HYnB6/W2SZabdzZLg7/kzIhp3pM83vHCgFpZU60=",
+        "lastModified": 1786237635,
+        "narHash": "sha256-Zu0jFsUfCCYzpQtRYBdPDnTjQFSeQFqChWPgpsJ0Pv4=",
         "owner": "kurisu-agent",
         "repo": "gumbo",
-        "rev": "e5bd5d0b5d285c945dfc5dc1028604320d7bc6a4",
+        "rev": "1c0b64ec3591076e62463d11f79806f70e73b921",
         "type": "github"
       },
       "original": {
