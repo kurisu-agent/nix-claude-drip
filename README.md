@@ -22,6 +22,12 @@ statusline.
   cache module in this flake — and the ~262 MiB binary crosses the WAN once
   per release instead of once per machine.
 - **Opinionated defaults** — a curated `settings.json` (see below), all overridable.
+- **The agent workstation, one knob each.** `services.claude-code.gumbo`
+  brings up the multi-account gateway and its `yolo` launcher;
+  `services.claude-code.herdr` installs the pinned
+  [herdr](https://herdr.dev) with
+  [herdr-drip](https://github.com/kurisu-agent/herdr-drip)'s plugins, hook
+  keepalive and source patches. Sections below.
 - **Runs anywhere with Nix.** NixOS host (the module, via `nix-ld`) or a glibc
   devcontainer (just the package — it runs on the system glibc loader, no
   patchelf).
