@@ -167,7 +167,7 @@ let
   # parameter, defaulted nowhere: each consumer states which it wants.
   gumboYoloBody = execPrefix: ''
     yolo() {
-      local key frag
+      local key frag m oneM
       # Per-launch session key: STABLE for this process (the statusline and
       # every request from this claude read the same key, so the launch
       # sticks to one account) and UNIQUE across launches — date seconds +
@@ -215,6 +215,47 @@ let
         fi
       fi
 
+      ${lib.optionalString (!cfg.gumbo.global) ''
+        # THE 1M CONTEXT WINDOW. Routed through the gateway, Claude Code classes
+        # the endpoint as a third-party "gateway" rather than the first-party
+        # subscription, and from there it cannot see the account's entitlement —
+        # so it caps a perfectly well-known model at 200k, where the SAME `opus`
+        # under a plain `claude` gets 1M. Nothing raises that cap after the fact:
+        # CLAUDE_CODE_MAX_CONTEXT_TOKENS, CLAUDE_CODE_AUTO_COMPACT_WINDOW and the
+        # `autoCompactWindow` setting are each min()'d against it, so they can
+        # only ever clamp DOWN. (They are what gives an UNKNOWN model like kimi
+        # its window — which is why launchEnv still carries one, and why that
+        # knob looked like it was working here when it never was.) The one lever
+        # that LIFTS the cap is the `[1m]` suffix on the model name.
+        #
+        # Read the model out of settings.json rather than naming one here, so
+        # `yolo` and `claude` stay on the SAME model and differ only by the
+        # suffix the gateway makes necessary. It has to be read at LAUNCH rather
+        # than baked in at build time, because `/model` rewrites that file: a
+        # build-time value goes stale the first time the model is switched. Only
+        # the aliases that HAVE a 1M variant are rewritten — a full model ID,
+        # `haiku`, `opusplan`, or a name already carrying the suffix is passed
+        # through untouched.
+        #
+        # Like launchEnv this is a DEFAULT, not an override: the `''${ANTHROPIC_MODEL:-...}`
+        # below keeps an explicit value, and `yolo kimi` never sees it because the
+        # resolve fragment above passes `--model`, which beats the environment.
+        # Empty is the "say nothing" value — Claude Code reads an empty
+        # ANTHROPIC_MODEL as unset and falls back to settings.json by itself — so
+        # the assignment can always be present, fully quoted. Neither the quotes
+        # nor the braces are cosmetic, and they guard against DIFFERENT shells:
+        # `opus[1m]` is a glob, so an unquoted expansion would be pathname-
+        # expanded by bash against the current directory — and in zsh, which
+        # sources this body just as bash does, a brace-less `$m[1m]` is a
+        # SUBSCRIPT, so it dies on `bad math expression` before claude ever runs.
+        oneM=""
+        if [ -z "''${ANTHROPIC_MODEL:-}" ]; then
+          m="$(${lib.getExe pkgs.jq} -r '.model // empty' "''${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || true)"
+          case "$m" in
+            opus | sonnet | fable) oneM="''${m}[1m]" ;;
+          esac
+        fi
+      ''}
       # THE TOKEN IS A PLACEHOLDER AND NOTHING ELSE. It exists so Claude Code
       # considers itself authenticated and sends the request to the gateway at
       # all; gumbo attaches the real per-account credential upstream. There is
@@ -232,7 +273,7 @@ let
       # and `yolo` work inside a guest that never holds a key`.
       ${execPrefix}${
         lib.optionalString (!cfg.gumbo.global)
-          ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ${launchEnvArgs}''
+          ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ANTHROPIC_MODEL="''${ANTHROPIC_MODEL:-$oneM}" ${launchEnvArgs}''
       }claude --dangerously-skip-permissions "$@"
     }
   '';
@@ -746,6 +787,15 @@ in
           alias, but a bare `yolo` never calls resolve — arg 1 has to be a
           non-flag for it to try — so nothing sets a window on the default
           path and the stale 200k stands.
+
+          That story is only about models Claude Code does NOT recognise, which
+          in practice means the third-party pools. For a model it DOES know,
+          CLAUDE_CODE_MAX_CONTEXT_TOKENS cannot raise anything: the window is
+          min()'d against the model's own ceiling, so the variable can only
+          clamp down and a `claude-*` behind the gateway stays at 200k however
+          large a number is put here. Lifting THAT is the `[1m]` model suffix's
+          job, which the yolo function applies on its own — see the block above
+          the `env` prefix.
 
           Only applies with `global = false`, which is where a per-launch env
           prefix exists to attach to. Under `global = true` every claude is

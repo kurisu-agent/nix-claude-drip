@@ -210,13 +210,48 @@ let
     "launchEnv is not exported into the calling shell" =
       !infix "export CLAUDE_CODE_MAX_CONTEXT_TOKENS" withLaunchEnv.environment.interactiveShellInit;
     # Empty by default, so the rendered body is unchanged for every host that
-    # does not ask for this.
+    # does not ask for this. Matched on the ASSIGNMENT rather than on the bare
+    # name, which — like "exec" above — also appears in the body's prose: the
+    # 1M-window comment names this variable to explain why it is the wrong lever
+    # for a model Claude Code recognises.
     "an empty launchEnv adds nothing" =
-      !infix "CLAUDE_CODE_MAX_CONTEXT_TOKENS" on.environment.interactiveShellInit;
+      !infix "CLAUDE_CODE_MAX_CONTEXT_TOKENS=" on.environment.interactiveShellInit;
     # global = true routes through settings.json and has no env prefix to hang
     # this on; settings.env is the place instead.
     "launchEnv is inert under global routing" =
       !infix "CLAUDE_CODE_MAX_CONTEXT_TOKENS" globalLaunchEnv.environment.interactiveShellInit;
+
+    # The 1M window. Behind the gateway Claude Code cannot see the account's
+    # entitlement and caps a model it otherwise knows at 200k, so the bare
+    # `yolo` asks for the `[1m]` variant itself — the only lever that lifts the
+    # cap, since every window knob is min()'d against it and can only clamp down.
+    # Braced, because zsh sources this body too and reads a brace-less `$m[1m]`
+    # as a subscript — `bad math expression`, before claude ever runs.
+    "yolo asks for the 1M variant of the configured model" =
+      infix "oneM=\"\${m}[1m]\"" on.environment.interactiveShellInit;
+    # Read at LAUNCH from the file `/model` rewrites, never baked in at build
+    # time — a build-time model goes stale the first time the model is switched,
+    # and `claude` and `yolo` would silently drift onto different models.
+    "the 1M model is read from settings.json at launch" =
+      infix "-r '.model // empty' \"\${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\""
+        on.environment.interactiveShellInit;
+    # A DEFAULT like launchEnv, so an explicit value and an alias's env both
+    # still win. `yolo kimi` never reaches it anyway: resolve passes `--model`,
+    # and a flag beats the environment.
+    "the 1M model defers to an explicit ANTHROPIC_MODEL" =
+      infix "ANTHROPIC_MODEL=\"\${ANTHROPIC_MODEL:-$oneM}\"" on.environment.interactiveShellInit;
+    # Only the aliases that HAVE a 1M variant are rewritten; a full model ID,
+    # `haiku`, `opusplan`, or a name already carrying the suffix passes through.
+    "only the 1M-capable aliases are rewritten" =
+      infix "opus | sonnet | fable)" on.environment.interactiveShellInit;
+    # Quoted, and not cosmetically: `opus[1m]` is a glob, so an unquoted
+    # expansion would be pathname-expanded by bash against the current directory.
+    "the 1M model is never expanded unquoted" =
+      !infix "ANTHROPIC_MODEL=$oneM" on.environment.interactiveShellInit;
+    # global = true routes through settings.json and has no env prefix to hang
+    # this on — same reason launchEnv is inert there.
+    "the 1M model default is inert under global routing" =
+      !infix "[1m]" globalLaunchEnv.environment.interactiveShellInit;
 
     # serve = false is the client-only escape hatch.
     "serve = false leaves the daemon off" = !clientOnly.services.gumbo.enable;
