@@ -7,12 +7,19 @@
 # *package* instead — the binary runs on the system glibc with no module and
 # no nix-ld.
 #
-# `gumboFlake` is the gumbo input, applied by flake.nix ahead of the module
-# args. It is taken here so this module can IMPORT gumbo's own nixosModule:
-# enabling `services.claude-code.gumbo` then brings the daemon up as well as
-# the client wiring, instead of leaving the operator to pin gumbo separately
-# and remember to turn both halves on.
-gumboFlake:
+# The composed flakes arrive as the first argument, applied by flake.nix
+# ahead of the module args. `gumboFlake` is taken so this module can IMPORT
+# gumbo's own nixosModule: enabling `services.claude-code.gumbo` then brings
+# the daemon up as well as the client wiring, instead of leaving the operator
+# to pin gumbo separately and remember to turn both halves on. `herdrFlake` +
+# `herdrDripFlake` serve the same one-knob idea for the workspace manager:
+# `services.claude-code.herdr` installs the pinned herdr and enables
+# herdr-drip's two modules (hook keepalive + plugin provisioning) together.
+{
+  gumboFlake,
+  herdrFlake,
+  herdrDripFlake,
+}:
 {
   config,
   lib,
@@ -327,7 +334,15 @@ in
   # never touches `services.claude-code.gumbo` gains an option surface and
   # nothing else. Importing here is what lets one `gumbo.enable = true` wire
   # both halves; see the `gumbo` options below.
-  imports = [ gumboFlake.nixosModules.default ];
+  #
+  # herdr-drip's two modules ride the same way, inert until
+  # `services.claude-code.herdr.enable` (below) flips their enables: the
+  # claude-agent-state hook keepalive and the pinned plugin provisioning.
+  imports = [
+    gumboFlake.nixosModules.default
+    herdrDripFlake.nixosModules.claude-agent-state
+    herdrDripFlake.nixosModules.plugins
+  ];
 
   options.services.claude-code = {
     enable = lib.mkEnableOption "claude-drip — self-updating native Claude Code";
@@ -848,6 +863,33 @@ in
         '';
       };
     };
+
+    herdr = {
+      enable = lib.mkEnableOption ''
+        herdr, the terminal workspace manager, with the drip riding it. One
+        knob gets three things: the pinned herdr binary on PATH, herdr-drip's
+        claude-agent-state module (keeps herdr's SessionStart hook alive
+        across the settings.json overwrite THIS module performs), and
+        herdr-drip's plugin provisioning (drip plugins installed pinned to
+        the herdr-drip input's rev, curated config, yolo-shell + bun on the
+        server's PATH). The sub-enables are set with mkDefault, so
+        `services.herdr-drip.{claudeAgentState,plugins}` options remain
+        individually overridable'';
+
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = herdrFlake.packages.${pkgs.stdenv.hostPlatform.system}.default;
+        defaultText = lib.literalExpression "inputs.herdr.packages.\${system}.default";
+        description = ''
+          The herdr build to install. Defaults to this flake's own pinned
+          herdr — the same node `packages.<system>.herdr` forwards — so
+          every consumer runs the version this flake vouches for. Override
+          it where a host must run a different build (e.g. a circuit host
+          matching its kart guests' herdr); the drip modules resolve herdr
+          from PATH, so they follow whatever is installed here.
+        '';
+      };
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -857,6 +899,12 @@ in
     # cfg.gumbo.enable rather than assigned unconditionally so that a host
     # running gumbo for something other than claude is never overridden here.
     services.gumbo.enable = lib.mkIf cfg.gumbo.enable (lib.mkDefault cfg.gumbo.serve);
+
+    # The herdr halves, same shape: mkDefault so a host can still pare either
+    # back (e.g. `services.herdr-drip.plugins.enable = false`), guarded so a
+    # host running the herdr-drip modules on its own terms is never touched.
+    services.herdr-drip.claudeAgentState.enable = lib.mkIf cfg.herdr.enable (lib.mkDefault true);
+    services.herdr-drip.plugins.enable = lib.mkIf cfg.herdr.enable (lib.mkDefault true);
 
     # Publish what the statusline resolved to (see the option's description).
     services.claude-code.statusLine.resolvedCommand = statusLineCommand;
@@ -875,7 +923,8 @@ in
     ++ lib.optional cfg.installUpdateCli updater
     ++ lib.optional cfg.beads pkgs.beads
     ++ lib.optional (cfg.gumbo.enable && cfg.gumbo.package != null) cfg.gumbo.package
-    ++ lib.optional (cfg.gumbo.enable && cfg.gumbo.yoloOnPath) gumboYoloCommand;
+    ++ lib.optional (cfg.gumbo.enable && cfg.gumbo.yoloOnPath) gumboYoloCommand
+    ++ lib.optional cfg.herdr.enable cfg.herdr.package;
 
     # settings.json, delivery path #1 — user activation. Runs for every user
     # with a systemd user manager, including ones not named in `users`, which

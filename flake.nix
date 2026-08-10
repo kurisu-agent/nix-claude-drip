@@ -35,6 +35,20 @@
       url = "github:herdrdev/herdr";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # herdr-drip — our herdr plugins, curated config, and the two NixOS
+    # modules this module composes: claude-agent-state (keeps herdr's
+    # SessionStart hook alive across the settings.json overwrite THIS module
+    # performs) and plugins (drip plugin installs pinned to herdr-drip's own
+    # rev). Carried here for the same one-knob reason as gumbo:
+    # `services.claude-code.herdr.enable = true` gets the binary, the hook
+    # keepalive and the plugins together. Public, no credential requirement,
+    # and enable-gated, so `nix flake check` stays as fast as before. Bump
+    # with `nix flake update herdr-drip`.
+    herdr-drip = {
+      url = "github:kurisu-agent/herdr-drip";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -43,6 +57,7 @@
       nixpkgs,
       gumbo,
       herdr,
+      herdr-drip,
     }:
     let
       systems = [
@@ -94,10 +109,16 @@
         }
       );
 
-      # The module takes the gumbo flake as its first argument so it can import
-      # gumbo's own nixosModule and default the client's package/addr off the
-      # daemon's. Consumers still import `nixosModules.default` unchanged.
-      nixosModules.default = import ./nixos gumbo;
+      # The module takes the composed flakes as its first argument: gumbo so
+      # it can import gumbo's own nixosModule and default the client's
+      # package/addr off the daemon's; herdr + herdr-drip so one
+      # `herdr.enable = true` gets the binary, the hook keepalive and the
+      # plugins. Consumers still import `nixosModules.default` unchanged.
+      nixosModules.default = import ./nixos {
+        gumboFlake = gumbo;
+        herdrFlake = herdr;
+        herdrDripFlake = herdr-drip;
+      };
 
       # The host-side pull-through cache for the release channel. Deliberately
       # NOT imported by nixosModules.default: a client machine has no reason to

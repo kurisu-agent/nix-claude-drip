@@ -134,6 +134,25 @@ alias's model + env through `gumbo resolve`.
 `inputs.nix-claude-drip.inputs.gumbo.follows` it away and supply
 `services.claude-code.gumbo.package` yourself.
 
+## herdr — the workspace manager, with its drip
+
+Same one-knob idea for [herdr](https://herdr.dev):
+
+```nix
+services.claude-code.herdr.enable = true;
+```
+
+That installs the herdr this flake pins (`packages.<system>.herdr` forwards
+the same node) and enables both of
+[herdr-drip](https://github.com/kurisu-agent/herdr-drip)'s modules:
+claude-agent-state, which keeps herdr's SessionStart hook alive across the
+settings.json overwrite this module performs, and plugins, which keeps the
+drip's plugins installed pinned to the herdr-drip input's rev with the
+curated config and `yolo-shell` + `bun` on the server's PATH. Both
+sub-enables are `mkDefault`, so `services.herdr-drip.*` options can pare
+either half back; `herdr.package` overrides which herdr build the host runs
+(the drip modules resolve herdr from PATH and follow it).
+
 ## Use it
 
 NixOS module:

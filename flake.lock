@@ -42,6 +42,26 @@
         "type": "github"
       }
     },
+    "herdr-drip": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786345840,
+        "narHash": "sha256-vybgJW/oHpyk2MK5F4SaybZ2lrUXOVks7BMtfkgUoM8=",
+        "owner": "kurisu-agent",
+        "repo": "herdr-drip",
+        "rev": "ff49f13bb3cf6816f27ecbdb75b414c32c7eab26",
+        "type": "github"
+      },
+      "original": {
+        "owner": "kurisu-agent",
+        "repo": "herdr-drip",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1779560665,
@@ -62,6 +82,7 @@
       "inputs": {
         "gumbo": "gumbo",
         "herdr": "herdr",
+        "herdr-drip": "herdr-drip",
         "nixpkgs": "nixpkgs"
       }
     },
