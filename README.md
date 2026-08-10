@@ -153,6 +153,11 @@ sub-enables are `mkDefault`, so `services.herdr-drip.*` options can pare
 either half back; `herdr.package` overrides which herdr build the host runs
 (the drip modules resolve herdr from PATH and follow it).
 
+herdr-drip's **hardcore plugins** — its source-patch set for what herdr has
+no plugin surface for — are applied to `herdr.package` by default, downstream
+of the package choice, so an overriding host supplies an unpatched build and
+still gets the set. `herdr.dripPatches = false` opts out.
+
 ## Use it
 
 NixOS module:

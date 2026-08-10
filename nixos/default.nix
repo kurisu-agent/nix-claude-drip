@@ -81,6 +81,13 @@ let
     // lib.optionalAttrs (cfg.plugins != [ ]) { enabledPlugins = lib.genAttrs cfg.plugins (_: true); }
   );
 
+  # The herdr that actually lands on PATH: the host's package choice with
+  # herdr-drip's hardcore-plugin patch set applied on top (unless opted out).
+  # Patching downstream of the choice is what lets a host override
+  # `herdr.package` with an unpatched build and still carry the set.
+  herdrPackage =
+    if cfg.herdr.dripPatches then herdrDripFlake.lib.patchHerdr cfg.herdr.package else cfg.herdr.package;
+
   # gumbo (multi-account gateway) client wiring. Absolute `${pkg}/bin/gumbo`
   # when a package is given — PATH-independent, so the yolo function and the
   # statusline wrapper work regardless of the interactive PATH — else the bare
@@ -886,7 +893,23 @@ in
           every consumer runs the version this flake vouches for. Override
           it where a host must run a different build (e.g. a circuit host
           matching its kart guests' herdr); the drip modules resolve herdr
-          from PATH, so they follow whatever is installed here.
+          from PATH, so they follow whatever is installed here. Supply it
+          UNPATCHED — `dripPatches` below applies herdr-drip's patch set
+          downstream of this choice.
+        '';
+      };
+
+      dripPatches = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Apply herdr-drip's source-patch set ("hardcore plugins" — the
+          drip's opinions herdr has no plugin surface for, e.g. the running
+          version rendered in the sidebar header) to `package` before
+          installing. Applied HERE, downstream of the package choice, so a
+          host that overrides `package` still gets the set; each patch
+          fails the build loudly if a herdr bump breaks it. See herdr-drip's
+          nix/herdr-patches.nix.
         '';
       };
     };
@@ -924,7 +947,7 @@ in
     ++ lib.optional cfg.beads pkgs.beads
     ++ lib.optional (cfg.gumbo.enable && cfg.gumbo.package != null) cfg.gumbo.package
     ++ lib.optional (cfg.gumbo.enable && cfg.gumbo.yoloOnPath) gumboYoloCommand
-    ++ lib.optional cfg.herdr.enable cfg.herdr.package;
+    ++ lib.optional cfg.herdr.enable herdrPackage;
 
     # settings.json, delivery path #1 — user activation. Runs for every user
     # with a systemd user manager, including ones not named in `users`, which
