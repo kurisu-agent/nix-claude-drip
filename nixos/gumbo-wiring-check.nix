@@ -80,6 +80,22 @@ let
     };
   };
 
+  # launchEnv: pool-wide launch env for the bare `yolo` that never calls
+  # `gumbo resolve` and so never gets an alias's env.
+  withLaunchEnv = eval {
+    services.claude-code.gumbo = {
+      enable = true;
+      launchEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS = "1000000";
+    };
+  };
+  globalLaunchEnv = eval {
+    services.claude-code.gumbo = {
+      enable = true;
+      global = true;
+      launchEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS = "1000000";
+    };
+  };
+
   gumboPkg = on.services.gumbo.package;
   hasPkg = c: lib.elem gumboPkg c.environment.systemPackages;
   statusline = c: c.services.claude-code.statusLine.resolvedCommand;
@@ -176,6 +192,31 @@ let
           services.claude-code.yoloAlias = false;
           services.claude-code.gumbo.enable = true;
         }).warnings;
+
+    # launchEnv rides the same per-launch `env` prefix as the routing vars, so
+    # it reaches claude on EVERY yolo — including the bare one, which never
+    # calls resolve and so never sees an alias's env.
+    "launchEnv reaches the claude invocation" =
+      infix "CLAUDE_CODE_MAX_CONTEXT_TOKENS=" withLaunchEnv.environment.interactiveShellInit;
+    # As a DEFAULT, not an assignment. The prefix is the last thing to set the
+    # variable, so a bare `VAR=value` here would silently beat the alias env
+    # the resolve fragment exported a few lines earlier — kimi's real window
+    # would lose to the pool-wide one on `yolo kimi`.
+    "launchEnv defers to an alias's env rather than overriding it" =
+      infix "CLAUDE_CODE_MAX_CONTEXT_TOKENS=\"\${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-1000000}\""
+        withLaunchEnv.environment.interactiveShellInit;
+    # Prefixed, never exported: an exported value would outlive a failed launch
+    # and leak into the next plain `claude` in that shell.
+    "launchEnv is not exported into the calling shell" =
+      !infix "export CLAUDE_CODE_MAX_CONTEXT_TOKENS" withLaunchEnv.environment.interactiveShellInit;
+    # Empty by default, so the rendered body is unchanged for every host that
+    # does not ask for this.
+    "an empty launchEnv adds nothing" =
+      !infix "CLAUDE_CODE_MAX_CONTEXT_TOKENS" on.environment.interactiveShellInit;
+    # global = true routes through settings.json and has no env prefix to hang
+    # this on; settings.env is the place instead.
+    "launchEnv is inert under global routing" =
+      !infix "CLAUDE_CODE_MAX_CONTEXT_TOKENS" globalLaunchEnv.environment.interactiveShellInit;
 
     # serve = false is the client-only escape hatch.
     "serve = false leaves the daemon off" = !clientOnly.services.gumbo.enable;

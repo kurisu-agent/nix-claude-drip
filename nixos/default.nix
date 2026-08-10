@@ -80,6 +80,16 @@ let
   # word, expecting `gumbo` on PATH (e.g. from services.gumbo).
   gumboBin = if cfg.gumbo.package == null then "gumbo" else lib.getExe' cfg.gumbo.package "gumbo";
 
+  # `gumbo.launchEnv` rendered as arguments for the yolo `env` prefix. Each is
+  # a DEFAULT — `VAR="${VAR:-value}"` — because the prefix is the LAST thing to
+  # set the variable and a bare `VAR=value` there would silently beat the alias
+  # env the resolve fragment exported a few lines earlier. Sorted, since
+  # mapAttrsToList follows attribute order and a stable string keeps the
+  # derivation from churning.
+  launchEnvArgs = lib.concatStrings (
+    lib.mapAttrsToList (n: v: ''${n}="''${${n}:-${v}}" '') cfg.gumbo.launchEnv
+  );
+
   # GLOBAL routing: the two loopback env vars go into settings.env (merged
   # UNDER cfg.settings, so still overridable), so EVERY claude routes through
   # the gateway. Empty unless gumbo.enable && gumbo.global — yolo-scoped mode
@@ -222,7 +232,7 @@ let
       # and `yolo` work inside a guest that never holds a key`.
       ${execPrefix}${
         lib.optionalString (!cfg.gumbo.global)
-          ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ''
+          ''env ANTHROPIC_BASE_URL="http://${cfg.gumbo.addr}" CLAUDE_CODE_OAUTH_TOKEN="${cfg.gumbo.placeholderToken}" ${launchEnvArgs}''
       }claude --dangerously-skip-permissions "$@"
     }
   '';
@@ -707,6 +717,40 @@ in
           Claude Code build rejects its shape — a prefix-shaped but obviously
           fake value like `sk-ant-oat01-gumbo-placeholder` satisfies both a
           prefix check and "clearly fake".
+        '';
+      };
+
+      launchEnv = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        example = {
+          CLAUDE_CODE_MAX_CONTEXT_TOKENS = "1000000";
+        };
+        description = ''
+          Env EVERY `yolo` launch gets, attached to the same per-launch `env`
+          prefix as the routing vars — so it reaches claude without being
+          exported into the calling shell, and a failed launch leaves nothing
+          behind to misroute the next plain `claude`.
+
+          Each entry is a DEFAULT, not an override: it expands to
+          `VAR="''${VAR:-value}"`, so a gumbo alias's own `env` (which the
+          resolve fragment exports just above) wins, and so does anything the
+          caller already had set. That ordering is the whole point — a launch
+          that actually asked for kimi must still get
+          `aliases.kimi.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS`, not the default
+          meant for the Anthropic pool.
+
+          The context window is the reason this exists. Claude Code assumes
+          200k when it does not know a model's real window and auto-compacts
+          five times too early on a 1M model. `gumbo resolve` fixes that for an
+          alias, but a bare `yolo` never calls resolve — arg 1 has to be a
+          non-flag for it to try — so nothing sets a window on the default
+          path and the stale 200k stands.
+
+          Only applies with `global = false`, which is where a per-launch env
+          prefix exists to attach to. Under `global = true` every claude is
+          routed through settings.json and `settings.env` is where this goes
+          instead.
         '';
       };
 
