@@ -780,6 +780,15 @@ let
   # binary find its own endpoint", which is what a kart needs: its endpoint
   # arrives on the identity share at runtime and must not be baked into the
   # guest closure.
+  #
+  # Passed as ENV, not as a flag, because the two binaries that answer `status`
+  # spell the flag differently and `gumboBin` may be either: the owner CLI takes
+  # `--socket`/GUMBO_SOCKET (ticket 0136 deleted its address flag outright), and
+  # the kart's `gumbo-client` takes `--daemon`/GUMBO_DAEMON. A wrong flag is not
+  # a degraded segment, it is `error: unexpected argument` on stderr, exit 2, and
+  # — because this call is deliberately fail-open — a silently missing account
+  # for as long as nobody runs the command by hand. Setting both variables is
+  # binary-agnostic: each reads the one it declares and ignores the other.
   mkGumboStatusline =
     {
       innerCommand,
@@ -788,6 +797,11 @@ let
       alwaysShow ? false,
       timeout ? "0.3",
     }:
+    let
+      endpointEnv = lib.optionalString (
+        daemon != null
+      ) "env GUMBO_SOCKET=${lib.escapeShellArg daemon} GUMBO_DAEMON=${lib.escapeShellArg daemon} ";
+    in
     pkgs.writeShellApplication {
       name = "claude-statusline-gumbo";
       runtimeInputs = [
@@ -811,9 +825,7 @@ let
           # gumbo only tests its family, so the display name serves as well as
           # the id.
           model=$(printf '%s' "$input" | jq -r '.model.display_name // ""' 2>/dev/null || true)
-          seg=$(timeout ${timeout} ${gumboBin} ${
-            lib.optionalString (daemon != null) "--daemon ${lib.escapeShellArg daemon} "
-          }\
+          seg=$(timeout ${timeout} ${endpointEnv}${gumboBin} \
                   status --session "''${GUMBO_SESSION:-default}" --format line \
                   --model "$model" \
                   2>/dev/null || true)
