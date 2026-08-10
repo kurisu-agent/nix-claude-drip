@@ -240,10 +240,27 @@ let
     # and a flag beats the environment.
     "the 1M model defers to an explicit ANTHROPIC_MODEL" =
       infix "ANTHROPIC_MODEL=\"\${ANTHROPIC_MODEL:-$oneM}\"" on.environment.interactiveShellInit;
-    # Only the aliases that HAVE a 1M variant are rewritten; a full model ID,
-    # `haiku`, `opusplan`, or a name already carrying the suffix passes through.
+    # Only the aliases that HAVE a 1M variant are rewritten; `opusplan`, `best`
+    # and a third-party name all pass through untouched.
     "only the 1M-capable aliases are rewritten" =
       infix "opus | sonnet | fable)" on.environment.interactiveShellInit;
+    # `/model` writes a bare alias for a family but a full ID for a specific
+    # pick, and either can be sitting in settings.json — both spellings have to
+    # be matched or the fix silently does nothing the moment a model is pinned.
+    "the full model IDs /model writes are rewritten too" =
+      infix "claude-opus-* | claude-sonnet-* | claude-fable-* | claude-mythos-*)"
+        on.environment.interactiveShellInit;
+    # haiku is left out ON PURPOSE, and this is the assertion that keeps it out:
+    # the suffix is NOT validated against the model, so `haiku[1m]` reports a 1M
+    # window for a model whose real ceiling is 200k and would run the session
+    # past it into a 400. Matched on the case-arm shapes, since the prose above
+    # names haiku to explain exactly this.
+    "haiku is never given a 1M suffix" =
+      !infix "haiku)" on.environment.interactiveShellInit
+      && !infix "claude-haiku" on.environment.interactiveShellInit;
+    # Appending to a name that already carries the suffix would double it.
+    "a model already asking for 1M is left alone" =
+      infix "*'[1m]'*)" on.environment.interactiveShellInit;
     # Quoted, and not cosmetically: `opus[1m]` is a glob, so an unquoted
     # expansion would be pathname-expanded by bash against the current directory.
     "the 1M model is never expanded unquoted" =

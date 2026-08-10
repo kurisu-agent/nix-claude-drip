@@ -232,10 +232,20 @@ let
         # `yolo` and `claude` stay on the SAME model and differ only by the
         # suffix the gateway makes necessary. It has to be read at LAUNCH rather
         # than baked in at build time, because `/model` rewrites that file: a
-        # build-time value goes stale the first time the model is switched. Only
-        # the aliases that HAVE a 1M variant are rewritten — a full model ID,
-        # `haiku`, `opusplan`, or a name already carrying the suffix is passed
-        # through untouched.
+        # build-time value goes stale the first time the model is switched.
+        #
+        # Both spellings `/model` writes have to be matched — the bare alias it
+        # stores for a family (`opus`) and the full ID it stores for a specific
+        # pick (`claude-fable-5`) — because either can be sitting in that file.
+        #
+        # ONLY the 1M families, and haiku is left out ON PURPOSE. The suffix is
+        # not validated against the model: `haiku[1m]` is accepted and reports a
+        # 1M window for a model whose real ceiling is 200k, so a blanket append
+        # would push a session past the limit and take a 400 from the API. The
+        # residual risk is a RETIRED id in a 1M family (a pre-4.6 sonnet), which
+        # would be rewritten and shouldn't be; every model these families
+        # currently ship is 1M, and a name matching nothing here is passed
+        # through untouched, which is only ever the old 200k behaviour.
         #
         # Like launchEnv this is a DEFAULT, not an override: the `''${ANTHROPIC_MODEL:-...}`
         # below keeps an explicit value, and `yolo kimi` never sees it because the
@@ -252,7 +262,12 @@ let
         if [ -z "''${ANTHROPIC_MODEL:-}" ]; then
           m="$(${lib.getExe pkgs.jq} -r '.model // empty' "''${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || true)"
           case "$m" in
+            # already asking for the big window; appending again would double it
+            *'[1m]'*) ;;
+            # a family alias — claude resolves it to that family's current model
             opus | sonnet | fable) oneM="''${m}[1m]" ;;
+            # a specific pick, as `/model` writes it
+            claude-opus-* | claude-sonnet-* | claude-fable-* | claude-mythos-*) oneM="''${m}[1m]" ;;
           esac
         fi
       ''}
