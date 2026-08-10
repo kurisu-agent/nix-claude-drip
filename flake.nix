@@ -18,6 +18,23 @@
       url = "github:kurisu-agent/gumbo/feat/kart-split";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # herdr — the terminal workspace manager for AI coding agents. Pinned HERE,
+    # not by each consumer, because herdr is agent-workstation furniture of the
+    # same family as `claude`, `yolo` and the statusline: its default_shell IS
+    # `yolo`, and its claude integration hooks are what herdr-drip installs. One
+    # authority for the version means a circuit's host and its kart guests cannot
+    # drift a herdr apart from each other (they used to, via two separate pins).
+    #
+    # Exposed as `packages.<system>.herdr` only — deliberately NOT folded into
+    # `packages.default`, so `nix profile install` still gets just the Claude
+    # CLIs, and deliberately NOT a check, so herdr's rust+zig compile stays out
+    # of this flake's fast `nix flake check`. Public, so unlike gumbo it adds no
+    # credential requirement. Bump with `nix flake update herdr`.
+    herdr = {
+      url = "github:herdrdev/herdr";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -25,6 +42,7 @@
       self,
       nixpkgs,
       gumbo,
+      herdr,
     }:
     let
       systems = [
@@ -62,11 +80,17 @@
         in
         bins
         // {
-          # Everything on PATH from one `nix profile install`.
+          # Everything on PATH from one `nix profile install`. Built from `bins`
+          # alone, so the herdr below stays out of it — see the input's comment.
           default = pkgs.symlinkJoin {
             name = "claude-drip";
             paths = builtins.attrValues bins;
           };
+
+          # The pinned herdr, forwarded so consumers take the version from this
+          # flake rather than pinning their own. nix-env re-exports it, and a
+          # circuit reaches it from there for both its host and its kart guests.
+          herdr = herdr.packages.${system}.default;
         }
       );
 
