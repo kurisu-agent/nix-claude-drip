@@ -51,15 +51,15 @@
       "locked": {
         "lastModified": 1786421331,
         "narHash": "sha256-YCLlnwh4zr3nMp+IV3B+qBDgUQ/5g1XZLuVSsZBOBhw=",
-        "ref": "refs/heads/main",
+        "owner": "kurisu-agent",
+        "repo": "herdr-drip",
         "rev": "6236e67bbc6ae8f596d5604871981c2f2b73b6b4",
-        "revCount": 28,
-        "type": "git",
-        "url": "https://git.tail6914b3.ts.net/kurisu-agent/herdr-drip"
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "https://git.tail6914b3.ts.net/kurisu-agent/herdr-drip"
+        "owner": "kurisu-agent",
+        "repo": "herdr-drip",
+        "type": "github"
       }
     },
     "nixpkgs": {
