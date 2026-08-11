@@ -48,11 +48,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1786455813,
-        "narHash": "sha256-5bd8t9KNf/rEyWR1CBY8Skiwx23hcw7RNAiCCFFUdss=",
+        "lastModified": 1786467756,
+        "narHash": "sha256-++xDHZ1Lmg0auTVyjcff2jfpiJrf0cCdffT+gjpCYfs=",
         "owner": "kurisu-agent",
         "repo": "herdr-drip",
-        "rev": "85c51058e236a302b321e2cd3d740db9686ca2cb",
+        "rev": "0d42c9ef23e03a85006a6d1e785a25fcf16f25f4",
         "type": "github"
       },
       "original": {
