@@ -63,7 +63,8 @@ On by default (`opinionatedDefaults = true`), layered *under* your own `settings
 
 | key | value | |
 |---|---|---|
-| `effortLevel` | `"xhigh"` | persisted reasoning effort |
+| `model` | `"opus"` | default model, family alias so `/model` and yolo's 1M rewrite both read it |
+| `effortLevel` | `"high"` | persisted reasoning effort |
 | `tui` | `"fullscreen"` | fullscreen renderer |
 | `terminalProgressBarEnabled` | `true` | terminal taskbar progress |
 | `skipDangerousModePermissionPrompt` | `true` | no bypass-mode confirm |

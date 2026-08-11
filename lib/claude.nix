@@ -843,8 +843,8 @@ let
   # truth, shared by the NixOS module and any external consumer (via
   # mkSettings's `opinionated` flag, or by reading this set directly).
   opinionatedDefaults = {
-    model = "claude-fable-5";
-    effortLevel = "xhigh";
+    model = "opus";
+    effortLevel = "high";
     skipDangerousModePermissionPrompt = true;
     disableClaudeAiConnectors = true;
     terminalProgressBarEnabled = true;

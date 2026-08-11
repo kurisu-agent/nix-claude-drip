@@ -506,8 +506,8 @@ in
       description = ''
         Layer claude-drip's curated settings.json defaults UNDER your
         `settings` (which override them):
-          model = "claude-fable-5";
-          effortLevel = "xhigh";
+          model = "opus";
+          effortLevel = "high";
           tui = "fullscreen";
           skipDangerousModePermissionPrompt = true;
           disableClaudeAiConnectors = true;           # no claude.ai MCP connectors
