@@ -46,7 +46,7 @@
     # and enable-gated, so `nix flake check` stays as fast as before. Bump
     # with `nix flake update herdr-drip`.
     herdr-drip = {
-      url = "github:kurisu-agent/herdr-drip";
+      url = "git+https://git.tail6914b3.ts.net/kurisu-agent/herdr-drip";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
