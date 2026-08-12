@@ -777,8 +777,11 @@ let
         line="''${ACCENT}''${short_cwd}''${RESET}"
         # The worktree chip — the one saying "this session is NOT on the main
         # tree", which a path plus a branch name only imply if you already
-        # know the layout. Warning colour on purpose: salient, not alarming.
-        [ -n "$worktree" ] && line="''${line} ''${WARNING}󰙅 ''${worktree}''${RESET}"
+        # know the layout. Branch colour, same as the hash beside it: the chip
+        # stands where the branch would (which it usually replaces — see
+        # show_branch below), so it wears that family's colour; the glyph is
+        # what keeps it readable as a worktree rather than a branch.
+        [ -n "$worktree" ] && line="''${line} ''${BRANCH}󰙅 ''${worktree}''${RESET}"
         if [ -n "$branch" ]; then
           # The chip above already names the worktree, and every normal flow
           # derives the branch from that name (dr/<name>, worktree-<name>,
