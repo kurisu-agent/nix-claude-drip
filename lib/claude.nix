@@ -778,10 +778,10 @@ let
         line="''${ACCENT}''${short_cwd}''${RESET}"
         # The worktree chip — the one saying "this session is NOT on the main
         # tree", which a path plus a branch name only imply if you already
-        # know the layout. Its own palette role — blue, one step off the
-        # branch lavender: same cool family as the hash it sits beside
-        # (it usually replaces the branch — see show_branch below), and the
-        # distinct colour is what marks it as a worktree, so no glyph.
+        # know the layout. Its own palette role — peach, the one warm tone
+        # among the cool branch lavender and hash it sits beside (it usually
+        # replaces the branch — see show_branch below), so the chip reads as
+        # "not the main tree" at a glance and needs no glyph.
         [ -n "$worktree" ] && line="''${line} ''${WORKTREE}''${worktree}''${RESET}"
         if [ -n "$branch" ]; then
           # The chip above already names the worktree, and every normal flow
