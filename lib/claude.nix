@@ -648,7 +648,10 @@ let
   # mkStatusBin — `claude-statusline`: the full prompt
   # `<path> [󰙅 <worktree>] <branch> <a> <m> <d> <pct>% [<effort>] <model> <version> [hint]`.
   # The worktree chip appears whenever the session cwd sits inside a linked
-  # git worktree (any location — in-repo or a sibling like repo.wt/<name>).
+  # git worktree (any location — in-repo or a sibling like repo.wt/<name>),
+  # and the path then shows the MAIN checkout (plus any subdir within the
+  # worktree) rather than the worktree's own directory — the chip names the
+  # worktree, so the path answers "which project", not "which copy".
   # Reads the running version from stdin `.version`; appends the same update
   # hint inline. effortLevel renders a heat-map glyph (effort isn't in stdin).
   mkStatusBin =
@@ -702,11 +705,10 @@ let
             printf '%s/%s/%s/%s/%s' "''${segs[0]}" "''${segs[1]}" "''${segs[2]}" $'' "''${segs[$((n-1))]}"
           fi
         }
-        short_cwd=$(path_for_display "$cwd")
-
         branch=""
         short_hash=""
         worktree=""
+        display_cwd="$cwd"
         added=0
         modified=0
         deleted=0
@@ -716,9 +718,25 @@ let
           # stays off. Derived from git rather than the stdin field
           # (.workspace.git_worktree) so it renders the same on every Claude
           # version this drip ships to.
-          gitdir=$(git -C "$cwd" rev-parse --absolute-git-dir 2>/dev/null || true)
+          gitinfo=$(git -C "$cwd" rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel 2>/dev/null || true)
+          gitdir=$(printf '%s\n' "$gitinfo" | sed -n 1p)
+          common=$(printf '%s\n' "$gitinfo" | sed -n 2p)
+          top=$(printf '%s\n' "$gitinfo" | sed -n 3p)
           case "$gitdir" in
-            */.git/worktrees/*) worktree="''${gitdir##*/}" ;;
+            */.git/worktrees/*)
+              worktree="''${gitdir##*/}"
+              # Inside a worktree the PATH shows the main checkout, not the
+              # worktree's own directory: the chip above already names the
+              # worktree, so spelling out .claude/worktrees/<name> (or a
+              # sibling repo.wt/<name>) is redundant and eats the row. Any
+              # subdirectory WITHIN the worktree is kept, spliced onto the
+              # main root, so depth stays visible. Falls back to the literal
+              # cwd if the common dir is not a plain <main>/.git.
+              main_root="''${common%/.git}"
+              if [ "$main_root" != "$common" ] && [ -d "$main_root" ]; then
+                display_cwd="$main_root''${cwd#"$top"}"
+              fi
+              ;;
           esac
           branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
           if [ -n "$branch" ]; then
@@ -737,6 +755,9 @@ let
             done < <(git -C "$cwd" status --porcelain 2>/dev/null)
           fi
         fi
+        # After the git block: display_cwd is only rewritten there (worktree
+        # case), so shortening any earlier would show the pre-rewrite path.
+        short_cwd=$(path_for_display "$display_cwd")
 
         ${colorVars}
 
