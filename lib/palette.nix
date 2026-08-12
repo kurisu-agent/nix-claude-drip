@@ -19,6 +19,7 @@ let
     mocha = {
       accent = "#a6e3a1"; # path
       branch = "#b4befe"; # git branch + hash
+      worktree = "#89b4fa"; # worktree chip — blue: one step off the branch lavender
       success = "#94e2d5"; # added count / restart-ready hint
       warning = "#f9e2af"; # modified count / downloading hint
       error = "#f38ba8"; # deleted count / update-error hint
@@ -36,6 +37,7 @@ let
     latte = {
       accent = "#40a02b"; # path (green)
       branch = "#7287fd"; # git branch + hash (lavender)
+      worktree = "#1e66f5"; # worktree chip (blue)
       success = "#179299"; # added count / restart-ready hint (teal)
       warning = "#df8e1d"; # modified count / downloading hint (yellow)
       error = "#d20f39"; # deleted count / update-error hint (red)

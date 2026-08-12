@@ -82,6 +82,7 @@ let
     RESET=$'\033[0m'
     ACCENT=$'\033[38;2;${hexToRgbCsv palette.accent}m'
     BRANCH=$'\033[38;2;${hexToRgbCsv palette.branch}m'
+    WORKTREE=$'\033[38;2;${hexToRgbCsv palette.worktree}m'
     SUCCESS=$'\033[38;2;${hexToRgbCsv palette.success}m'
     WARNING=$'\033[38;2;${hexToRgbCsv palette.warning}m'
     ERROR=$'\033[38;2;${hexToRgbCsv palette.error}m'
@@ -646,7 +647,7 @@ let
     };
 
   # mkStatusBin — `claude-statusline`: the full prompt
-  # `<path> [󰙅 <worktree>] <branch> <a> <m> <d> <pct>% [<effort>] <model> <version> [hint]`.
+  # `<path> [<worktree>] <branch> <a> <m> <d> <pct>% [<effort>] <model> <version> [hint]`.
   # The worktree chip appears whenever the session cwd sits inside a linked
   # git worktree (any location — in-repo or a sibling like repo.wt/<name>),
   # and the path then shows the MAIN checkout (plus any subdir within the
@@ -777,11 +778,11 @@ let
         line="''${ACCENT}''${short_cwd}''${RESET}"
         # The worktree chip — the one saying "this session is NOT on the main
         # tree", which a path plus a branch name only imply if you already
-        # know the layout. Branch colour, same as the hash beside it: the chip
-        # stands where the branch would (which it usually replaces — see
-        # show_branch below), so it wears that family's colour; the glyph is
-        # what keeps it readable as a worktree rather than a branch.
-        [ -n "$worktree" ] && line="''${line} ''${BRANCH}󰙅 ''${worktree}''${RESET}"
+        # know the layout. Its own palette role — blue, one step off the
+        # branch lavender: same cool family as the hash it sits beside
+        # (it usually replaces the branch — see show_branch below), and the
+        # distinct colour is what marks it as a worktree, so no glyph.
+        [ -n "$worktree" ] && line="''${line} ''${WORKTREE}''${worktree}''${RESET}"
         if [ -n "$branch" ]; then
           # The chip above already names the worktree, and every normal flow
           # derives the branch from that name (dr/<name>, worktree-<name>,
