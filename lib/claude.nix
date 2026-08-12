@@ -780,7 +780,17 @@ let
         # know the layout. Warning colour on purpose: salient, not alarming.
         [ -n "$worktree" ] && line="''${line} ''${WARNING}󰙅 ''${worktree}''${RESET}"
         if [ -n "$branch" ]; then
-          line="''${line} ''${BRANCH}''${branch}''${RESET}"
+          # The chip above already names the worktree, and every normal flow
+          # derives the branch from that name (dr/<name>, worktree-<name>,
+          # feat/<name>), so inside a worktree the branch usually repeats the
+          # chip verbatim. Show it only when it does NOT end with the
+          # worktree's name — the odd divergent branch stays visible, the
+          # routine echo disappears. Hash and dirty counts always stay.
+          show_branch=1
+          if [ -n "$worktree" ]; then
+            case "$branch" in *"$worktree") show_branch=0 ;; esac
+          fi
+          [ "$show_branch" -eq 1 ] && line="''${line} ''${BRANCH}''${branch}''${RESET}"
           [ -n "$short_hash" ] && line="''${line} ''${BRANCH}''${short_hash}''${RESET}"
           [ "$added"    -gt 0 ] && line="''${line} ''${SUCCESS}''${added}''${RESET}"
           [ "$modified" -gt 0 ] && line="''${line} ''${WARNING}''${modified}''${RESET}"
