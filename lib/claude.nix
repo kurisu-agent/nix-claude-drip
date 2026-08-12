@@ -646,7 +646,9 @@ let
     };
 
   # mkStatusBin — `claude-statusline`: the full prompt
-  # `<path> <branch> <a> <m> <d> <pct>% [<effort>] <model> <version> [hint]`.
+  # `<path> [󰙅 <worktree>] <branch> <a> <m> <d> <pct>% [<effort>] <model> <version> [hint]`.
+  # The worktree chip appears whenever the session cwd sits inside a linked
+  # git worktree (any location — in-repo or a sibling like repo.wt/<name>).
   # Reads the running version from stdin `.version`; appends the same update
   # hint inline. effortLevel renders a heat-map glyph (effort isn't in stdin).
   mkStatusBin =
@@ -704,10 +706,20 @@ let
 
         branch=""
         short_hash=""
+        worktree=""
         added=0
         modified=0
         deleted=0
         if [ -n "$cwd" ] && [ -d "$cwd" ]; then
+          # A linked worktree's gitdir sits under <main>/.git/worktrees/<name>;
+          # in the main tree (or outside git) the pattern misses and the chip
+          # stays off. Derived from git rather than the stdin field
+          # (.workspace.git_worktree) so it renders the same on every Claude
+          # version this drip ships to.
+          gitdir=$(git -C "$cwd" rev-parse --absolute-git-dir 2>/dev/null || true)
+          case "$gitdir" in
+            */.git/worktrees/*) worktree="''${gitdir##*/}" ;;
+          esac
           branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
           if [ -n "$branch" ]; then
             short_hash=$(git -C "$cwd" rev-parse --short=4 HEAD 2>/dev/null || true)
@@ -742,6 +754,10 @@ let
         esac
 
         line="''${ACCENT}''${short_cwd}''${RESET}"
+        # The worktree chip — the one saying "this session is NOT on the main
+        # tree", which a path plus a branch name only imply if you already
+        # know the layout. Warning colour on purpose: salient, not alarming.
+        [ -n "$worktree" ] && line="''${line} ''${WARNING}󰙅 ''${worktree}''${RESET}"
         if [ -n "$branch" ]; then
           line="''${line} ''${BRANCH}''${branch}''${RESET}"
           [ -n "$short_hash" ] && line="''${line} ''${BRANCH}''${short_hash}''${RESET}"
