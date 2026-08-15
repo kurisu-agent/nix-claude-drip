@@ -127,11 +127,16 @@
       # point the clients' `releaseBase` at it.
       nixosModules.cache = import ./nixos/cache.nix;
 
-      # `nix flake check` builds every CLI — which runs shellcheck on each — and
-      # on x86_64 (the only system gumbo builds for) evaluates the gumbo wiring.
+      # `nix flake check` builds every CLI — which runs shellcheck on each —
+      # plus the statusline segment's own behaviour check (stubbed gumbo, so no
+      # gumbo build), and on x86_64 (the only system gumbo builds for) evaluates
+      # the gumbo wiring.
       checks = forAllSystems (
         system:
         mkBins system
+        // {
+          gumbo-segment = import ./lib/gumbo-segment-check.nix { inherit nixpkgs system; };
+        }
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
           gumbo-wiring = import ./nixos/gumbo-wiring-check.nix {
             inherit nixpkgs system;

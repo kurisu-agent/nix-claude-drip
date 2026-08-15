@@ -150,6 +150,7 @@ let
     inherit gumboBin;
     inherit (cfg.gumbo) daemon;
     alwaysShow = cfg.gumbo.global;
+    usage = cfg.gumbo.sessionStatuslineUsage;
   };
 
   statusLineCommand =
@@ -863,10 +864,32 @@ in
         default = true;
         description = ''
           Append a gumbo segment (`gumbo status --format line`: the account
-          this launch's requests land on, plus 5h/7d headroom) to the
-          statusline, keyed by the launch's session key. Time-boxed and
-          fail-open, so it never blanks the row. No effect when
-          statusLine.enable = false.
+          this launch's requests land on, plus the 5h/7d headroom —
+          `sessionStatuslineUsage`) to the statusline, keyed by the launch's
+          session key. Time-boxed and fail-open, so it never blanks the row. No
+          effect when statusLine.enable = false.
+        '';
+      };
+
+      sessionStatuslineUsage = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Include the USAGE half of that segment: the 5h/7d windows gumbo names
+          once they cross its warn threshold, and the Fable-scoped weekly
+          whenever Fable is the model in play — `hext3 7·86%·2d21h2m`.
+
+          false keeps the account and drops the numbers, so the row still says
+          WHICH identity is serving this launch — the thing that decides whether
+          a rate-limit or a `/cost` means anything, and which cannot be read off
+          anywhere else once several accounts are in the pool — without a
+          headroom readout ticking under the eye on every repaint. Nothing else
+          changes: `gumbo status` on the terminal still answers in full, and
+          gumbo still switches accounts on its own.
+
+          Only the sub-knob is affected, so this is the setting to reach for
+          rather than `sessionStatusline = false`, which takes the account with
+          it. No effect when `sessionStatusline` is false.
         '';
       };
     };
