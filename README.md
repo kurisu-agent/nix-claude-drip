@@ -134,6 +134,7 @@ alias's model + env through `gumbo resolve`.
 | `global` | `false` | `true` routes *every* claude, not just `yolo` |
 | `yoloOnPath` | `false` | `yolo` as a real command too, for launchers that never source a profile |
 | `sessionStatusline` | `true` | appends `account · 5h N% · 7d N% left`, time-boxed and fail-open |
+| `sessionStatuslineUsage` | `true` | `false` keeps the account and drops the headroom numbers |
 | `package` | `services.gumbo.package` | `null` means "expect `gumbo` on PATH" |
 
 **gumbo is a private repo**, so evaluating this flake — or anything that pins it

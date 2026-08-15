@@ -840,12 +840,25 @@ let
   # — because this call is deliberately fail-open — a silently missing account
   # for as long as nobody runs the command by hand. Setting both variables is
   # binary-agnostic: each reads the one it declares and ignores the other.
+  #
+  # `usage` splits that segment in two, because its halves answer different
+  # questions and only one of them moves. gumbo renders the line as
+  # `<account>[*]` followed by one space-joined group per window worth naming
+  # (`hext3 7·86%·2d21h2m`, plus `F·…` on Fable): the account is WHICH identity
+  # is serving this launch — the thing that decides whether a `/cost` or a
+  # rate-limit means anything — and the rest is a headroom readout that ticks
+  # under the eye on every repaint. With `usage = false` only the leading field
+  # survives, so the identity (pin marker `*` and all) still renders and the
+  # numbers do not. Splitting on whitespace is exactly gumbo's own contract
+  # here: the account may not contain a space, and every window it appends
+  # begins with one.
   mkGumboStatusline =
     {
       innerCommand,
       gumboBin ? "gumbo",
       daemon ? null,
       alwaysShow ? false,
+      usage ? true,
       timeout ? "0.3",
     }:
     let
@@ -857,8 +870,12 @@ let
       name = "claude-statusline-gumbo";
       runtimeInputs = [
         pkgs.coreutils # timeout, cat
-        pkgs.jq # the model name, for the Fable-weekly segment
-      ];
+      ]
+      # Only the usage half reads the payload: the model it names decides
+      # whether the Fable weekly is shown, and with the windows gone there is
+      # nothing left for it to decide. Dropped from the closure AND from the
+      # render — one fewer fork per repaint on a row that repaints every second.
+      ++ lib.optional usage pkgs.jq;
       # NOT errexit/pipefail: a non-zero inner statusline or gumbo call must not
       # abort and blank the row. nounset matches the inner statusline's `set -u`.
       bashOptions = [ "nounset" ];
@@ -871,15 +888,29 @@ let
         # a plain, un-routed claude shows no gumbo info. Global (alwaysShow):
         # always render (a plain claude routes upstream as key "default").
         if [ -n "''${GUMBO_SESSION:-}" ] || ${lib.boolToString alwaysShow}; then
-          # The model in play, so a Fable session always sees its scoped weekly.
-          # Passed even when empty (an unreadable payload is just "not Fable");
-          # gumbo only tests its family, so the display name serves as well as
-          # the id.
-          model=$(printf '%s' "$input" | jq -r '.model.display_name // ""' 2>/dev/null || true)
+          ${
+            # The model in play, so a Fable session always sees its scoped
+            # weekly. Passed even when empty (an unreadable payload is just "not
+            # Fable"); gumbo only tests its family, so the display name serves as
+            # well as the id. Read only on the usage path — see runtimeInputs.
+            lib.optionalString usage ''
+              model=$(printf '%s' "$input" | jq -r '.model.display_name // ""' 2>/dev/null || true)
+            ''
+          }
           seg=$(timeout ${timeout} ${endpointEnv}${gumboBin} \
                   status --session "''${GUMBO_SESSION:-default}" --format line \
-                  --model "$model" \
-                  2>/dev/null || true)
+                  ${lib.optionalString usage ''--model "$model" ''}2>/dev/null || true)
+          ${
+            # Account only: keep the leading field and drop every window gumbo
+            # appended after it. `*` (pinned) rides along with the account, as it
+            # should — a pin is a fact about WHICH account, not about how much of
+            # it is left. Parameter expansion rather than cut/awk, so no fork per
+            # repaint; an empty segment (no request under this key yet, a
+            # timed-out daemon) stays empty and still renders nothing at all.
+            lib.optionalString (!usage) ''
+              seg=''${seg%% *} # account only — usage windows dropped
+            ''
+          }
         fi
 
         if [ -n "$seg" ]; then

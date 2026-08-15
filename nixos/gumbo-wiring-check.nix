@@ -80,6 +80,15 @@ let
     };
   };
 
+  # The account without the headroom readout — the statusline still names which
+  # identity is serving, and nothing moves under it.
+  usageOff = eval {
+    services.claude-code.gumbo = {
+      enable = true;
+      sessionStatuslineUsage = false;
+    };
+  };
+
   # launchEnv: pool-wide launch env for the bare `yolo` that never calls
   # `gumbo resolve` and so never gets an alias's env.
   withLaunchEnv = eval {
@@ -269,6 +278,22 @@ let
     # this on — same reason launchEnv is inert there.
     "the 1M model default is inert under global routing" =
       !infix "[1m]" globalLaunchEnv.environment.interactiveShellInit;
+
+    # sessionStatuslineUsage: the segment's two halves are separable. What the
+    # rendered shell DOES with gumbo's line — keep the account, drop the windows
+    # — is asserted for real in `checks.gumbo-segment`, which can run it; this
+    # is the wiring half, that the knob REACHES the wrapper at all. Store paths,
+    # so a knob that never made it into the derivation would leave them equal
+    # and an inert option would look like a working one.
+    "the usage readout is on by default" = on.services.claude-code.gumbo.sessionStatuslineUsage;
+    "turning the usage readout off rebuilds the statusline wrapper" =
+      noCtx (toString (statusline usageOff)) != noCtx (toString (statusline on));
+    # And it is the USAGE that goes, not the segment: `sessionStatusline = false`
+    # is the knob that takes the account with it, and this must not become a
+    # second spelling of that.
+    "turning the usage readout off keeps the gumbo segment" = suffix "claude-statusline-gumbo" (
+      toString (statusline usageOff)
+    );
 
     # serve = false is the client-only escape hatch.
     "serve = false leaves the daemon off" = !clientOnly.services.gumbo.enable;
