@@ -7,11 +7,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1786749321,
-        "narHash": "sha256-8mRn0tZej+FqCeFQcI8rz7OciT5Kpf1Wlrce7/CFGaE=",
+        "lastModified": 1786850927,
+        "narHash": "sha256-e1RTvf5fvqMjLcX5Gbxqeu5FmVnEy6MhKWRbzbKmPgw=",
         "owner": "kurisu-agent",
         "repo": "gumbo",
-        "rev": "bc4d5141b86d167835cb9dc69a09e319abff8530",
+        "rev": "37f2f8f0f3506d57c5be62e3c58ea5ae919c53ac",
         "type": "github"
       },
       "original": {
@@ -28,11 +28,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1786316128,
-        "narHash": "sha256-pPvzytJrCEYhYq7pg3HjO/Nlnir4qJ0MAgGxYGIUdyc=",
+        "lastModified": 1786831869,
+        "narHash": "sha256-ALhahxbdgnN8rMvlKmgB5py0etICwyYY75Uz0jLIpM4=",
         "owner": "herdrdev",
         "repo": "herdr",
-        "rev": "f5067ed829ae5743499916b941b2310c50681f29",
+        "rev": "51b7064ef0a02642393bab1d2eea0f4dbd8414d2",
         "type": "github"
       },
       "original": {
@@ -48,11 +48,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1786779400,
-        "narHash": "sha256-4p56x6SxH5KHsWXWoz9aHtclENnqAo+ft//VWOgFPdY=",
+        "lastModified": 1786854483,
+        "narHash": "sha256-3U2WEYBx84R7v8QG2ekWfH4ts5j8GTWzxUVGwAgz6+o=",
         "owner": "kurisu-agent",
         "repo": "herdr-drip",
-        "rev": "bef2f8dce8a0d07e03cf87c18eaa36815fa09fb7",
+        "rev": "67429fcfa65dd12a5051071a262bae4c87574124",
         "type": "github"
       },
       "original": {
