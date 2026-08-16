@@ -691,7 +691,7 @@ let
         model_lc=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]' | sed -E 's/ ?\(([^)]*) context\)/ \1/')
 
         # Path shortener — first two segments + final, eliding the middle
-        # with a nerd-font ellipsis (U+F141). Threshold n > 4.
+        # with an ellipsis (U+2026). Threshold n > 4.
         path_for_display() {
           p="$1"
           case "$p" in
@@ -703,7 +703,7 @@ let
           if [ "$n" -le 4 ]; then
             printf '%s' "$p"
           else
-            printf '%s/%s/%s/%s/%s' "''${segs[0]}" "''${segs[1]}" "''${segs[2]}" $'' "''${segs[$((n-1))]}"
+            printf '%s/%s/%s/%s/%s' "''${segs[0]}" "''${segs[1]}" "''${segs[2]}" '…' "''${segs[$((n-1))]}"
           fi
         }
         branch=""
