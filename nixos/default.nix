@@ -343,13 +343,22 @@ in
   # nothing else. Importing here is what lets one `gumbo.enable = true` wire
   # both halves; see the `gumbo` options below.
   #
-  # herdr-drip's two modules ride the same way, inert until
-  # `services.claude-code.herdr.enable` (below) flips their enables: the
-  # claude-agent-state hook keepalive and the pinned plugin provisioning.
+  # herdr-drip's three modules ride the same way, inert until something flips
+  # their enables: the claude-agent-state hook keepalive and the pinned plugin
+  # provisioning, both turned on by `services.claude-code.herdr.enable`
+  # (below), and `workflows`, which is NOT — every workflow defaults off and
+  # stays off until a host names one.
+  #
+  # `workflows` is imported here rather than left to hosts because its whole
+  # value is being available to ask about: a host reads
+  # `config.services.herdr-drip.workflowGuidance` to feed its CLAUDE.md, and an
+  # option that only exists once you have imported the module that defines it
+  # is one a host cannot discover. It costs an option surface and nothing else.
   imports = [
     gumboFlake.nixosModules.default
     herdrDripFlake.nixosModules.claude-agent-state
     herdrDripFlake.nixosModules.plugins
+    herdrDripFlake.nixosModules.workflows
   ];
 
   options.services.claude-code = {
