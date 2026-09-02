@@ -107,6 +107,58 @@ let
     DIM=$'${dimSeq}'
   '';
 
+  # updateGateFragment — decide whether to fire a background update check,
+  # and fire it DETACHED. Shared by the launcher and the hint/statusline so
+  # the two ways an update ever starts cannot drift apart.
+  #
+  # The spawn is `setsid -f`, not the `( updater & ) &` double-fork it
+  # replaced. The double-fork reparented the child to init but left it in
+  # the CALLER's process group, on the caller's terminal session — so
+  # closing claude (or the terminal) signalled the group and killed a
+  # transfer with minutes of banked bytes in it, too dead to write a
+  # closing state. A session of its own severs both: the download outlives
+  # every claude session, and the updater's flock still keeps it
+  # single-flight.
+  #
+  # Two triggers, not one: the hourly stamp, and — inside the hourly
+  # window — a `downloading` whose heartbeat has stopped. The second exists
+  # because the stamp is touched when a check STARTS: an updater killed
+  # mid-transfer left `downloading` in state.json and a fresh stamp, so
+  # nothing would come back for the corpse for up to an hour, and the user
+  # stared at a frozen percentage the whole time. A stale heartbeat
+  # re-fires immediately; the updater resumes the partial rather than
+  # starting over, and a false positive (transfer alive but stalled) just
+  # bounces off the flock. 45 s is the same staleness rule the hint uses
+  # to paint a download as dead — the two thresholds should move together.
+  updateGateFragment =
+    {
+      updaterBin,
+      checkInterval,
+      requireInstall ? false,
+    }:
+    ''
+      stamp="$CC_HOME/.lastcheck"
+      now=$(date +%s)
+      mt=$(stat -c %Y "$stamp" 2>/dev/null || echo 0)
+      fire=0
+      if [ $((now - mt)) -ge ${toString checkInterval} ]; then
+        fire=1
+      else
+        IFS=$'\x1f' read -r g_status g_tick < <(jq -r '[.status // "", (.tick // 0 | tostring)] | join("")' "$CC_HOME/state.json" 2>/dev/null) || true
+        case ''${g_tick:-} in
+          "" | *[!0-9]*) g_tick=0 ;;
+        esac
+        if [ "''${g_status:-}" = downloading ] && [ "$g_tick" -gt 0 ] && [ $((now - g_tick)) -gt 45 ]; then
+          fire=1
+        fi
+      fi
+      if [ "$fire" = 1 ]${lib.optionalString requireInstall ''&& [ -e "$CC_HOME/current/claude" ]''}; then
+        mkdir -p "$CC_HOME"
+        touch "$stamp"
+        ${pkgs.util-linux}/bin/setsid -f ${updaterBin} </dev/null >/dev/null 2>&1 || true
+      fi
+    '';
+
   # Update indicator. Assumes `running`, RESET, DIM, WARNING, SUCCESS, ERROR
   # are set; fires the gated hourly check, then sets `hint` to the glyph for
   # whatever the updater is doing, or "" when there is nothing to say.
@@ -127,19 +179,10 @@ let
     ''
       CC_HOME="${ccHome}"
 
-      # One wall-clock read, two consumers: the gate on the periodic check
-      # just below, and the staleness test on the download heartbeat further
-      # down — which runs whether or not that check is enabled.
-      now=$(date +%s)
-      ${lib.optionalString autoCheck ''
-        stamp="$CC_HOME/.lastcheck"
-        mt=$(stat -c %Y "$stamp" 2>/dev/null || echo 0)
-        if [ $((now - mt)) -ge ${toString checkInterval} ]; then
-          mkdir -p "$CC_HOME"
-          touch "$stamp"
-          ( ${updaterBin} >/dev/null 2>&1 & ) &
-        fi
-      ''}
+      # `now` is set inside the gate when the check is enabled (one
+      # wall-clock read, two consumers); without the gate it still has to
+      # exist for the staleness test on the download heartbeat further down.
+      ${if autoCheck then updateGateFragment { inherit updaterBin checkInterval; } else "now=$(date +%s)"}
 
       # Both args must be known versions — an empty running version (e.g.
       # redacted under IS_DEMO, or a pre-first-render render) must NOT be
@@ -357,10 +400,31 @@ let
         fi
 
         tmp="$VERS/.$latest.tmp"
-        rm -rf "$tmp"
         mkdir -p "$tmp"
 
-        write_state downloading "$latest" "$ondisk"
+        # Bytes banked by a previous attempt — one killed mid-transfer, or
+        # one the stall timeouts cut off. The tmp dir is per-version and the
+        # install below is gated on the manifest checksum, so resuming a
+        # stranger's partial is safe: the worst a bad partial can do is fail
+        # verification and be discarded there. A partial LARGER than the
+        # manifest's byte count can never verify — start that one over.
+        start=0
+        if [ -f "$tmp/claude" ]; then
+          start="$(stat -c %s "$tmp/claude")"
+        fi
+        if [ "$size" -gt 0 ] && [ "$start" -gt "$size" ]; then
+          rm -f "$tmp/claude"
+          start=0
+        fi
+
+        # A resumed transfer opens at the partial's percentage, not at
+        # null — the difference between "picking up at 84%" and a meter
+        # that looks like it threw the bytes away.
+        if [ "$size" -gt 0 ] && [ "$start" -gt 0 ]; then
+          write_state downloading "$latest" "$ondisk" "$((start * 100 / size))"
+        else
+          write_state downloading "$latest" "$ondisk"
+        fi
 
         # On the timeouts. The old flag here was `--max-time 300`, a
         # wall-clock cap on the entire transfer — and the payload is ~262 MiB,
@@ -374,6 +438,12 @@ let
         #   --speed-time 120       abort only after 120 s under 4 KB/s
         #   --max-time 1800        backstop for a link that crawls at exactly
         #                          enough speed to never trip the stall test
+        #   -C -                   resume from whatever $tmp/claude already
+        #                          holds. Paired with keeping the partial on
+        #                          transfer failure (below), a killed or
+        #                          cut-off attempt continues instead of
+        #                          starting the ~262 MiB over; the checksum
+        #                          gate is what makes trusting old bytes safe.
         # Do not put a wall-clock cap sized for a fast link back.
         #
         # WHY --speed-time IS 120 AND NOT SOMETHING TIGHTER. curl's low-speed
@@ -430,58 +500,85 @@ let
         #   * The loop is the tail of a pipeline and so runs in a subshell:
         #     nothing it assigns survives it. That is fine, because its entire
         #     job is to write a file.
-        last_us=0
-        if ! curl -fL --no-silent --progress-bar \
-              --connect-timeout 10 --speed-limit 4096 --speed-time 120 --max-time 1800 \
-              -o "$tmp/claude" "$base/$latest/$platform/claude" 2>&1 >/dev/null |
-            while IFS= read -r -d $'\r' rec || [ -n "$rec" ]; do
-              rec="''${rec%$'\n'}"
+        # A partial that already holds every byte skips the transfer
+        # entirely — a previous attempt died between the last byte and the
+        # swap — and goes straight to verification, which alone decides
+        # whether those bytes are the release. This guard is also what keeps
+        # a complete file away from `-C -`: resuming at EOF draws an HTTP
+        # 416 from a range-capable server, which would read as a failed
+        # update when nothing is wrong.
+        if [ "$size" -eq 0 ] || [ "$start" -lt "$size" ]; then
+          last_us=0
+          rc=0
+          curl -fL --no-silent --progress-bar -C - \
+                --connect-timeout 10 --speed-limit 4096 --speed-time 120 --max-time 1800 \
+                -o "$tmp/claude" "$base/$latest/$platform/claude" 2>&1 >/dev/null |
+              while IFS= read -r -d $'\r' rec || [ -n "$rec" ]; do
+                rec="''${rec%$'\n'}"
 
-              # A percentage is OPTIONAL, and the record is a heartbeat either
-              # way. Only records ending in `%` carry a number: curl draws a
-              # bare `#=#=#` for a transfer whose length the server never
-              # declared, and its FAILURE lines land on this same stream
-              # ending in a bare number ("curl: (22) … error: 404"), which a
-              # `''${rec##* }` would otherwise read as "404%".
-              #
-              # Keeping the two apart is the whole point of this shape. An
-              # earlier cut `continue`d on any record without a `%`, which
-              # meant a chunked transfer wrote NO state at all for its entire
-              # length — so `tick` stayed frozen at the single write above,
-              # and 45 s in, the statusline's staleness rule painted a
-              # perfectly healthy 262 MiB download as a dead one. An unknown
-              # percentage must degrade to "downloading, amount unknown", not
-              # to "downloading, apparently deceased".
-              p=""
-              case $rec in
-                *%)
-                  p="''${rec##* }"
-                  p="''${p%\%}"
-                  p="''${p%%.*}"
-                  case $p in
-                    "" | *[!0-9]*) p="" ;;
-                  esac
-                  if [ -n "$p" ] && [ "$p" -gt 100 ]; then
-                    p=""
-                  fi
-                  ;;
-              esac
+                # A percentage is OPTIONAL, and the record is a heartbeat either
+                # way. Only records ending in `%` carry a number: curl draws a
+                # bare `#=#=#` for a transfer whose length the server never
+                # declared, and its FAILURE lines land on this same stream
+                # ending in a bare number ("curl: (22) … error: 404"), which a
+                # `''${rec##* }` would otherwise read as "404%".
+                #
+                # Keeping the two apart is the whole point of this shape. An
+                # earlier cut `continue`d on any record without a `%`, which
+                # meant a chunked transfer wrote NO state at all for its entire
+                # length — so `tick` stayed frozen at the single write above,
+                # and 45 s in, the statusline's staleness rule painted a
+                # perfectly healthy 262 MiB download as a dead one. An unknown
+                # percentage must degrade to "downloading, amount unknown", not
+                # to "downloading, apparently deceased".
+                p=""
+                case $rec in
+                  *%)
+                    p="''${rec##* }"
+                    p="''${p%\%}"
+                    p="''${p%%.*}"
+                    case $p in
+                      "" | *[!0-9]*) p="" ;;
+                    esac
+                    if [ -n "$p" ] && [ "$p" -gt 100 ]; then
+                      p=""
+                    fi
+                    ;;
+                esac
 
-              # 100 is exempt from the throttle: it is the last thing the
-              # meter will ever say, it lands within half a second of the
-              # write before it more often than not, and if this process is
-              # killed in the gap before `verifying` then whatever is left in
-              # the file is what the user stares at.
-              now_us=''${EPOCHREALTIME/[.,]/}
-              if [ "$p" = 100 ] || [ $((now_us - last_us)) -ge 500000 ]; then
-                last_us=$now_us
-                write_state downloading "$latest" "$ondisk" "$p"
-              fi
-            done
-        then
-          rm -rf "$tmp"
-          write_state error "$latest" "$ondisk"
-          exit 0
+                # With -C - the meter counts the REMAINDER: a resume from 84%
+                # draws 0→100 over the last 16% of the file. Remap to
+                # whole-file percent so the statusline picks up where the dead
+                # attempt left off instead of appearing to throw the bytes
+                # away. Unadjustable without the manifest's size — then the
+                # remainder-relative number stands, which is at least moving.
+                if [ -n "$p" ] && [ "$size" -gt 0 ] && [ "$start" -gt 0 ]; then
+                  p=$(((start * 100 + (size - start) * p) / size))
+                fi
+
+                # 100 is exempt from the throttle: it is the last thing the
+                # meter will ever say, it lands within half a second of the
+                # write before it more often than not, and if this process is
+                # killed in the gap before `verifying` then whatever is left in
+                # the file is what the user stares at.
+                now_us=''${EPOCHREALTIME/[.,]/}
+                if [ "$p" = 100 ] || [ $((now_us - last_us)) -ge 500000 ]; then
+                  last_us=$now_us
+                  write_state downloading "$latest" "$ondisk" "$p"
+                fi
+              done || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            # The partial is KEPT on failure — it is the resume point for the
+            # next attempt — with two exceptions, curl's own verdicts that
+            # this partial can never be continued: 33 (server does not do
+            # byte ranges) and 36 (bad resume offset). Keeping those would
+            # fail identically on every retry, so they start clean instead.
+            case $rc in
+              33 | 36) rm -rf "$tmp" ;;
+            esac
+            write_state error "$latest" "$ondisk"
+            exit 0
+          fi
         fi
 
         # The bytes are in; what is left is hashing 262 MiB, which takes long
@@ -523,6 +620,16 @@ let
           [ "$v" = "$ondisk" ] && continue
           rm -rf "$d"
         done
+
+        # Partials for OTHER versions are dead weight once this install
+        # landed — the release they belonged to is not the target any more,
+        # and nothing else ever deletes them (the `*/` glob above skips
+        # dotdirs, which is how machines accumulated months-old .N.tmp
+        # strays). $tmp itself was mv'd into place and cannot match.
+        for d in "$VERS"/.*.tmp; do
+          [ -e "$d" ] || continue
+          rm -rf "$d"
+        done
       '';
     };
 
@@ -541,13 +648,11 @@ let
     }:
     pkgs.writeShellApplication {
       name = "claude";
-      runtimeInputs =
-        with pkgs;
-        [
-          coreutils
-          ripgrep
-        ]
-        ++ lib.optional (autoTrust || autoOnboard) jq;
+      runtimeInputs = with pkgs; [
+        coreutils
+        ripgrep
+        jq # the update gate reads state.json (and autoTrust/autoOnboard edit ~/.claude.json)
+      ];
       text = ''
         export DISABLE_AUTOUPDATER=1
         export USE_BUILTIN_RIPGREP=0
@@ -571,16 +676,12 @@ let
           fi
         ''}
 
-        ${lib.optionalString autoCheck ''
-          stamp="$CC_HOME/.lastcheck"
-          now=$(date +%s)
-          mt=$(stat -c %Y "$stamp" 2>/dev/null || echo 0)
-          if [ $((now - mt)) -ge ${toString checkInterval} ] && [ -e "$CC_HOME/current/claude" ]; then
-            mkdir -p "$CC_HOME"
-            touch "$stamp"
-            ( ${updaterBin} >/dev/null 2>&1 & ) &
-          fi
-        ''}
+        ${lib.optionalString autoCheck (updateGateFragment {
+          inherit updaterBin checkInterval;
+          # No install yet → the synchronous bootstrap just below owns the
+          # first fetch; a background race against it would be noise.
+          requireInstall = true;
+        })}
 
         if [ ! -e "$CC_HOME/current/claude" ]; then
           echo "claude: no install found, fetching latest…" >&2
