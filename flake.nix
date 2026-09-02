@@ -31,8 +31,17 @@
     # CLIs, and deliberately NOT a check, so herdr's rust+zig compile stays out
     # of this flake's fast `nix flake check`. Public, so unlike gumbo it adds no
     # credential requirement. Bump with `nix flake update herdr`.
+    # PINNED TO THE v0.8.2 TAG, not master, since 2026-09-03. Upstream's
+    # 207be3c7 (#3487, "render the shell in the client", 2026-09-01) moved the
+    # whole TUI out of src/ui/* and src/app/input/* into a new
+    # src/client/shell/* tree — deleting or gutting every file herdr-drip's
+    # hardcore patches anchor in except plugins/panes.rs and persist/restore.rs.
+    # A bare-master bump therefore fails postPatch at best and silently changes
+    # meaning at worst. Move this pin forward only to a STABLE tag (upstream has
+    # cut none past the rewrite), and expect that bump to be a deliberate port
+    # of the patch set to client/shell/*, not a version bump.
     herdr = {
-      url = "github:herdrdev/herdr";
+      url = "github:herdrdev/herdr/v0.8.2";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
